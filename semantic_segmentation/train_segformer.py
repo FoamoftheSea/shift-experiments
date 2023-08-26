@@ -12,7 +12,11 @@ from transformers import (
 )
 from shift_dev import SHIFTDataset
 from shift_dev.types import Keys
-from shift_dev.utils.backend import ZipBackend, FileBackend, DataBackend
+from shift_dev.utils.backend import (
+    ZipBackend,
+    FileBackend,
+    DataBackend,
+)
 from transformers.training_args import OptimizerNames
 
 from labels import id2label
@@ -90,7 +94,7 @@ def main(args):
         data_root=args.data_root,
         split="train",
         keys_to_load=KEYS_TO_LOAD,
-        views_to_load=["front"],
+        views_to_load=SHIFTDataset.VIEWS.remove("center"),
         shift_type="discrete",          # also supports "continuous/1x", "continuous/10x", "continuous/100x"
         backend=FileBackend(),           # also supports HDF5Backend(), FileBackend()
         verbose=True,
@@ -100,7 +104,7 @@ def main(args):
         data_root=args.data_root,
         split="val",
         keys_to_load=KEYS_TO_LOAD,
-        views_to_load=["front"],
+        views_to_load=SHIFTDataset.VIEWS.remove("center"),
         shift_type="discrete",
         backend=FileBackend(),
         verbose=True,
@@ -122,6 +126,7 @@ def main(args):
         logging_steps=1,
         eval_accumulation_steps=5,
         load_best_model_at_end=True,
+        dataloader_num_workers=args.workers,
         # optim=OptimizerNames.ADAMW_8BIT,
         # lr_scheduler_type=SchedulerType.COSINE,
         # push_to_hub=True,
@@ -156,11 +161,11 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("-o", "--output_dir", type=str, default="./segformer_output", help="Output dir to store results.")
     parser.add_argument("-d", "--data-root", type=str, default="F:/shift/", help="Path to SHIFT dataset.")
-    parser.add_argument("-w", "--workers", type=int, default=1, help="Number of data loader workers.")
+    parser.add_argument("-w", "--workers", type=int, default=0, help="Number of data loader workers.")
     parser.add_argument("-lr", "--learning-rate", type=float, default=0.00006, help="Initial learning rate for training.")
     parser.add_argument("-e", "--epochs", type=int, default=10, help="Number of epochs to run training.")
-    parser.add_argument("-bs", "--batch-size", type=int, default=1, help="Train and eval batch size.")
-    parser.add_argument("-gas", "--gradient-accumulation-steps", type=int, default=4, help="Number of gradient accumulation steps.")
+    parser.add_argument("-bs", "--batch-size", type=int, default=4, help="Train and eval batch size.")
+    parser.add_argument("-gas", "--gradient-accumulation-steps", type=int, default=1, help="Number of gradient accumulation steps.")
     parser.add_argument("-gc", "--gradient-checkpointing", action="store_true", help="Turn on gradient checkpointing")
 
     args = parser.parse_args()
