@@ -94,7 +94,7 @@ def main(args):
         data_root=args.data_root,
         split="train",
         keys_to_load=KEYS_TO_LOAD,
-        views_to_load=SHIFTDataset.VIEWS.remove("center"),
+        views_to_load=["front"],  # SHIFTDataset.VIEWS.remove("center"),
         shift_type="discrete",          # also supports "continuous/1x", "continuous/10x", "continuous/100x"
         backend=FileBackend(),           # also supports HDF5Backend(), FileBackend()
         verbose=True,
@@ -104,7 +104,7 @@ def main(args):
         data_root=args.data_root,
         split="val",
         keys_to_load=KEYS_TO_LOAD,
-        views_to_load=SHIFTDataset.VIEWS.remove("center"),
+        views_to_load=["front"],  # SHIFTDataset.VIEWS.remove("center"),
         shift_type="discrete",
         backend=FileBackend(),
         verbose=True,
