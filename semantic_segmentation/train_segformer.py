@@ -121,8 +121,8 @@ def main(args):
         save_total_limit=3,
         evaluation_strategy="steps",
         save_strategy="steps",
-        save_steps=20,
-        eval_steps=20,
+        save_steps=args.eval_steps,
+        eval_steps=args.eval_steps,
         logging_steps=1,
         eval_accumulation_steps=5,
         load_best_model_at_end=True,
@@ -167,6 +167,7 @@ if __name__ == "__main__":
     parser.add_argument("-bs", "--batch-size", type=int, default=4, help="Train and eval batch size.")
     parser.add_argument("-gas", "--gradient-accumulation-steps", type=int, default=1, help="Number of gradient accumulation steps.")
     parser.add_argument("-gc", "--gradient-checkpointing", action="store_true", help="Turn on gradient checkpointing")
+    parser.add_argument("-es", "--eval-steps", type=int, default=1000, help="Number of steps between eval/checkpoints.")
 
     args = parser.parse_args()
     main(args)
