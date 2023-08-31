@@ -124,9 +124,11 @@ def main(args):
         save_steps=args.eval_steps,
         eval_steps=args.eval_steps,
         logging_steps=1,
-        eval_accumulation_steps=5,
+        eval_accumulation_steps=args.eval_accumulation_steps,
         load_best_model_at_end=True,
         dataloader_num_workers=args.workers,
+        seed=args.seed,
+        max_steps=1,
         # optim=OptimizerNames.ADAMW_8BIT,
         # lr_scheduler_type=SchedulerType.COSINE,
         # push_to_hub=True,
@@ -160,14 +162,16 @@ def main(args):
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("-o", "--output_dir", type=str, default="./segformer_output", help="Output dir to store results.")
-    parser.add_argument("-d", "--data-root", type=str, default="F:/shift/", help="Path to SHIFT dataset.")
+    parser.add_argument("-d", "--data-root", type=str, default="F:/shift_small/", help="Path to SHIFT dataset.")
     parser.add_argument("-w", "--workers", type=int, default=0, help="Number of data loader workers.")
     parser.add_argument("-lr", "--learning-rate", type=float, default=0.00006, help="Initial learning rate for training.")
     parser.add_argument("-e", "--epochs", type=int, default=10, help="Number of epochs to run training.")
     parser.add_argument("-bs", "--batch-size", type=int, default=4, help="Train and eval batch size.")
     parser.add_argument("-gas", "--gradient-accumulation-steps", type=int, default=1, help="Number of gradient accumulation steps.")
     parser.add_argument("-gc", "--gradient-checkpointing", action="store_true", help="Turn on gradient checkpointing")
-    parser.add_argument("-es", "--eval-steps", type=int, default=1000, help="Number of steps between eval/checkpoints.")
+    parser.add_argument("-es", "--eval-steps", type=int, default=5000, help="Number of steps between eval/checkpoints.")
+    parser.add_argument("-eas", "--eval-accumulation-steps", type=int, default=375, help="Number of pred steps to accumulate on GPU before -> CPU")
+    parser.add_argument("-s", "--seed", type=int, default=42, help="Random seed for training.")
 
     args = parser.parse_args()
     main(args)
