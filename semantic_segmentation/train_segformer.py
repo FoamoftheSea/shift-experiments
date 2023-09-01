@@ -12,7 +12,7 @@ from shift_dev.utils.backend import (
 )
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
-from torchvision.transforms import ColorJitter
+from torchvision.transforms import v2
 # from torchmetrics import Metric
 # from torchmetrics.classification import Accuracy
 from transformers import (
@@ -40,6 +40,7 @@ from transformers.trainer_utils import (
     denumpify_detensorize,
     has_length,
 )
+from transformers.training_args import OptimizerNames
 from transformers.utils import (
     is_torch_tpu_available,
     logging,
@@ -53,6 +54,18 @@ if is_torch_tpu_available(check_device=False):
     import torch_xla.core.xla_model as xm
 
 logger = logging.get_logger(__name__)
+
+PRETRAINED_MODEL_NAME = "nvidia/segformer-b0-finetuned-cityscapes-512-1024"
+IMAGE_TRANSFORMS = [
+    v2.ColorJitter(brightness=0.25, contrast=0.25, saturation=0.25, hue=0.1),
+]
+FRAME_TRANSFORMS = []
+EVAL_FULL_RES = True
+image_size = {"height": 512, "width": 1024}
+image_processor_train = SegformerImageProcessor.from_pretrained(PRETRAINED_MODEL_NAME, do_reduce_labels=True)
+image_processor_train.size = image_size
+image_processor_val = SegformerImageProcessor.from_pretrained(PRETRAINED_MODEL_NAME, do_reduce_labels=True)
+image_processor_val.size = image_size
 
 KEYS_TO_LOAD = [
     Keys.images,                # note: images, shape (1, 3, H, W), uint8 (RGB)
@@ -70,11 +83,6 @@ KEYS_TO_LOAD = [
     # Keys.masks,                 # note: instance masks, shape (num_ins, H, W), binary
     # Keys.depth_maps,            # note: depth maps, shape (1, H, W), float (meters)
 ]
-
-PRETRAINED_MODEL_NAME = "nvidia/segformer-b0-finetuned-cityscapes-512-1024"
-jitter = ColorJitter(brightness=0.25, contrast=0.25, saturation=0.25, hue=0.1)
-image_processor = SegformerImageProcessor.from_pretrained(PRETRAINED_MODEL_NAME)
-image_processor.size = {"height": 512, "width": 1024}
 
 
 class SHIFTSegformerTrainer(Trainer):
@@ -384,7 +392,7 @@ class SHIFTSegformerEvalMetrics:
         return metrics
 
 
-metric = SHIFTSegformerEvalMetrics(ignore_class_ids={0})
+metric = SHIFTSegformerEvalMetrics(ignore_class_ids={255})
 
 
 def compute_metrics(eval_pred, calculate_result=True) -> Optional[dict]:
@@ -421,8 +429,10 @@ def main(args):
         shift_type="discrete",          # also supports "continuous/1x", "continuous/10x", "continuous/100x"
         backend=FileBackend(),           # also supports HDF5Backend(), FileBackend()
         verbose=True,
+        image_transforms=IMAGE_TRANSFORMS,
+        frame_transforms=FRAME_TRANSFORMS,
+        image_processor=image_processor_train,
     )
-    train_dataset.image_processor = image_processor
 
     val_dataset = SHIFTDataset(
         data_root=args.data_root,
@@ -432,8 +442,9 @@ def main(args):
         shift_type="discrete",
         backend=FileBackend(),
         verbose=True,
+        image_processor=image_processor_val,
+        eval_full_res=EVAL_FULL_RES,
     )
-    val_dataset.image_processor = image_processor
 
     training_args = TrainingArguments(
         output_dir=args.output_dir,
@@ -486,13 +497,13 @@ def main(args):
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("-o", "--output_dir", type=str, default="./segformer_output", help="Output dir to store results.")
-    parser.add_argument("-d", "--data-root", type=str, default="E:/shift_small/", help="Path to SHIFT dataset.")
+    parser.add_argument("-d", "--data-root", type=str, default="E:/shift/", help="Path to SHIFT dataset.")
     parser.add_argument("-w", "--workers", type=int, default=0, help="Number of data loader workers.")
     parser.add_argument("-lr", "--learning-rate", type=float, default=0.00006, help="Initial learning rate for training.")
     parser.add_argument("-e", "--epochs", type=int, default=10, help="Number of epochs to run training.")
     parser.add_argument("-bs", "--batch-size", type=int, default=4, help="Train and eval batch size.")
-    parser.add_argument("-gas", "--gradient-accumulation-steps", type=int, default=1, help="Number of gradient accumulation steps.")
-    parser.add_argument("-gc", "--gradient-checkpointing", action="store_true", help="Turn on gradient checkpointing")
+    parser.add_argument("-gas", "--gradient-accumulation-steps", type=int, default=2, help="Number of gradient accumulation steps.")
+    parser.add_argument("-gc", "--gradient-checkpointing", action="store_true", default=False, help="Turn on gradient checkpointing")
     parser.add_argument("-es", "--eval-steps", type=int, default=5000, help="Number of steps between eval/checkpoints.")
     parser.add_argument("-ms", "--max-steps", type=int, default=-1, help="Set to limit the number of total training steps.")
     parser.add_argument("-s", "--seed", type=int, default=42, help="Random seed for training.")
