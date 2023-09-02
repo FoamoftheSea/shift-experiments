@@ -1,7 +1,8 @@
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union, Any
 
 import numpy as np
 import torch
+from packaging import version
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 # from torchmetrics import Metric
@@ -10,6 +11,7 @@ from transformers import (
     TrainingArguments,
     Trainer,
     EvalPrediction,
+    is_apex_available,
 )
 from transformers.data.data_collator import DataCollator
 from transformers.deepspeed import deepspeed_init
@@ -29,14 +31,24 @@ from transformers.trainer_utils import (
     denumpify_detensorize,
     has_length,
 )
-from transformers.utils import (
-    is_torch_tpu_available,
-    logging
-)
+from transformers.utils import is_torch_tpu_available, logging, is_sagemaker_mp_enabled
 logger = logging.get_logger(__name__)
+
+if is_apex_available():
+    from apex import amp
 
 if is_torch_tpu_available(check_device=False):
     import torch_xla.core.xla_model as xm
+
+if is_sagemaker_mp_enabled():
+    import smdistributed.modelparallel.torch as smp
+    from smdistributed.modelparallel import __version__ as SMP_VERSION
+
+    IS_SAGEMAKER_MP_POST_1_10 = version.parse(SMP_VERSION) >= version.parse("1.10")
+
+    from transformers.trainer_pt_utils import smp_forward_backward, smp_forward_only, smp_gather, smp_nested_concat
+else:
+    IS_SAGEMAKER_MP_POST_1_10 = False
 
 
 class SHIFTSegformerTrainer(Trainer):
@@ -70,6 +82,50 @@ class SHIFTSegformerTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
         self.compute_metrics_interval = compute_metrics_interval
+
+    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+        """
+        Perform a training step on a batch of inputs.
+
+        Subclass and override to inject custom behavior.
+
+        Args:
+            model (`nn.Module`):
+                The model to train.
+            inputs (`Dict[str, Union[torch.Tensor, Any]]`):
+                The inputs and targets of the model.
+
+                The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
+                argument `labels`. Check your model's documentation for all accepted arguments.
+
+        Return:
+            `torch.Tensor`: The tensor with training loss on this batch.
+        """
+        model.train()
+        inputs = self._prepare_inputs(inputs)
+
+        if is_sagemaker_mp_enabled():
+            loss_mb = smp_forward_backward(model, inputs, self.args.gradient_accumulation_steps)
+            return loss_mb.reduce_mean().detach().to(self.args.device)
+
+        with self.compute_loss_context_manager():
+            loss = self.compute_loss(model, inputs)
+
+        del inputs
+        torch.cuda.empty_cache()
+
+        if self.args.n_gpu > 1:
+            loss = loss.mean()  # mean() to average on multi-gpu parallel training
+
+        if self.do_grad_scaling:
+            self.scaler.scale(loss).backward()
+        elif self.use_apex:
+            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            self.accelerator.backward(loss)
+
+        return loss.detach() / self.args.gradient_accumulation_steps
 
     def evaluation_loop(
         self,
@@ -221,6 +277,8 @@ class SHIFTSegformerTrainer(Trainer):
                         )
                 losses = nested_numpify(losses_host)
                 all_losses = losses if all_losses is None else np.concatenate((all_losses, losses), axis=0)
+                del losses_host, preds_host, inputs_host, labels_host
+                torch.cuda.empty_cache()
                 losses_host, preds_host, inputs_host, labels_host = None, None, None, None
 
             elif (

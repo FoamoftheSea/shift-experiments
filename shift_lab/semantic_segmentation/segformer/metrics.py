@@ -41,20 +41,3 @@ class SHIFTSegformerEvalMetrics:
         metrics.update(ious)
 
         return metrics
-
-def compute_metrics(eval_pred, calculate_result=True) -> Optional[dict]:
-    with torch.no_grad():
-        logits, labels = eval_pred
-        logits_tensor = torch.from_numpy(logits)
-        # scale the logits to the size of the label
-        logits_tensor = nn.functional.interpolate(
-            logits_tensor,
-            size=labels.shape[-2:],
-            mode="bilinear",
-            align_corners=False,
-        ).argmax(dim=1)
-
-        pred_labels = logits_tensor.detach().cpu().numpy()
-        metric.update(pred_labels, labels)
-
-        return metric.compute() if calculate_result else None
