@@ -23,6 +23,7 @@ id2label = {k: v.name for k, v in id2label.items()}
 label2id = {v: k for k, v in id2label.items()}
 
 logger = logging.get_logger(__name__)
+logger.setLevel(logging.DEBUG)
 
 PRETRAINED_MODEL_NAME = "nvidia/segformer-b0-finetuned-cityscapes-512-1024"
 IMAGE_TRANSFORMS = [
@@ -97,7 +98,7 @@ def main(args):
 
     val_dataset = SHIFTDataset(
         data_root=args.data_root,
-        split="val",
+        split="minival" if args.use_minival else "val",
         keys_to_load=KEYS_TO_LOAD,
         views_to_load=["front"],  # SHIFTDataset.VIEWS.remove("center"),
         shift_type="discrete",
@@ -124,7 +125,8 @@ def main(args):
         dataloader_num_workers=args.workers,
         seed=args.seed,
         max_steps=args.max_steps,
-        # optim=OptimizerNames.ADAMW_8BIT,
+        tf32=args.use_tf32,
+        optim=OptimizerNames.ADAMW_8BIT if args.use_adam8bit else OptimizerNames.ADAMW_TORCH,
         # lr_scheduler_type=SchedulerType.COSINE,
         # push_to_hub=True,
         # hub_model_id=hub_model_id,
@@ -160,15 +162,24 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--data-root", type=str, default="E:/shift/", help="Path to SHIFT dataset.")
     parser.add_argument("-w", "--workers", type=int, default=0, help="Number of data loader workers.")
     parser.add_argument("-lr", "--learning-rate", type=float, default=0.00006, help="Initial learning rate for training.")
-    parser.add_argument("-e", "--epochs", type=int, default=10, help="Number of epochs to run training.")
+    parser.add_argument("-e", "--epochs", type=int, default=5, help="Number of epochs to run training.")
     parser.add_argument("-bs", "--batch-size", type=int, default=4, help="Train batch size.")
     parser.add_argument("-ebs", "--eval-batch-size", type=int, default=None, help="Eval batch size. Defaults to train batch size.")
     parser.add_argument("-gas", "--gradient-accumulation-steps", type=int, default=2, help="Number of gradient accumulation steps.")
     parser.add_argument("-es", "--eval-steps", type=int, default=5000, help="Number of steps between eval/checkpoints.")
     parser.add_argument("-ms", "--max-steps", type=int, default=-1, help="Set to limit the number of total training steps.")
     parser.add_argument("-s", "--seed", type=int, default=42, help="Random seed for training.")
+    parser.add_argument("-tf32", "--use-tf32", action="store_true", default=True, help="Set to True if your setup supports TF32 dtype.")
+    parser.add_argument("-mv", "--use-minival", action="store_true", default=True, help="Use the minival validation set.")
+    parser.add_argument("-bnb", "--use-adam8bit", action="store_true", default=False, help="Use ADAMW_8BIT optimizer (linux only).")
 
     args = parser.parse_args()
     if args.eval_batch_size is None:
         args.eval_batch_size = args.batch_size
+
+    if args.use_tf32:
+        logger.info("Using TF32 dtype.")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
     main(args)
