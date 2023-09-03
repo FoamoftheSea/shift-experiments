@@ -8,22 +8,28 @@ from shift_dev.types import Keys
 from shift_dev.utils.backend import FileBackend
 from torchvision.transforms import v2
 from transformers import (
-    SegformerForSemanticSegmentation,
     SegformerImageProcessor,
     TrainingArguments,
 )
 from transformers.training_args import OptimizerNames
 from transformers.utils import logging
 
-from shift_lab.semantic_segmentation.labels import id2label
+from shift_lab.semantic_segmentation.shift_labels import id2label
 from shift_lab.semantic_segmentation.segformer.metrics import SHIFTSegformerEvalMetrics
-from shift_lab.semantic_segmentation.segformer.trainer import SHIFTSegformerTrainer
-
-id2label = {k: v.name for k, v in id2label.items()}
-label2id = {v: k for k, v in id2label.items()}
+from shift_lab.semantic_segmentation.segformer.trainer import (
+    SHIFTSegformerTrainer,
+    SHIFTSegformerForSemanticSegmentation,
+)
 
 logger = logging.get_logger(__name__)
 logger.setLevel(logging.DEBUG)
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+# Omitting these classes from eval in accordance with Cityscapes
+EVAL_IGNORE_IDS = {k for k, v in id2label.items() if v.ignoreInEval}
+id2label = {k: v.name for k, v in id2label.items()}
+label2id = {v: k for k, v in id2label.items()}
 
 PRETRAINED_MODEL_NAME = "nvidia/segformer-b0-finetuned-cityscapes-512-1024"
 IMAGE_TRANSFORMS = [
@@ -31,11 +37,46 @@ IMAGE_TRANSFORMS = [
 ]
 FRAME_TRANSFORMS = []
 EVAL_FULL_RES = True
+DO_REDUCE_LABELS = True
+if DO_REDUCE_LABELS:
+    EVAL_IGNORE_IDS.remove(0)
+    EVAL_IGNORE_IDS = {cid - 1 for cid in EVAL_IGNORE_IDS}
+    EVAL_IGNORE_IDS.add(255)
+
 image_size = {"height": 512, "width": 1024}
-image_processor_train = SegformerImageProcessor.from_pretrained(PRETRAINED_MODEL_NAME, do_reduce_labels=True)
+image_processor_train = SegformerImageProcessor.from_pretrained(PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS)
 image_processor_train.size = image_size
-image_processor_val = SegformerImageProcessor.from_pretrained(PRETRAINED_MODEL_NAME, do_reduce_labels=True)
+image_processor_val = SegformerImageProcessor.from_pretrained(PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS)
 image_processor_val.size = image_size
+
+CLASS_LOSS_WEIGHTS = {
+    'building': 0.04222825955577863,
+    'pedestrian': 0.047445990516605495,
+    'pole': 0.04716318294296953,
+    'road line': 0.04701319399433329,
+    'road': 0.03254657779903941,
+    'sidewalk': 0.045215864574844555,
+    'vegetation': 0.04268060265261902,
+    'vehicle': 0.04524841096107193,
+    'wall': 0.04683261072198212,
+    'traffic sign': 0.047584108152864686,
+    'sky': 0.03540394188413042,
+    'traffic light': 0.0475655153334132,
+    'static': 0.04745211954958151,
+    'dynamic': 0.04756501593671283,
+    'terrain': 0.045982952375233296,
+    'other': 0.04748171409451219,
+    'ground': 0.0474869899781356,
+    'fence': 0.04731463233410513,
+    'guard rail': 0.047304633054814596,
+    'rail track': 0.047465059495701845,
+    'water': 0.04760968530230659,
+    'bridge': 0.04740893878924414,
+    'unlabeled': 0.0,
+}
+CLASS_LOSS_WEIGHTS = [CLASS_LOSS_WEIGHTS[id2label[cid]] for cid in sorted(id2label.keys())]
+if DO_REDUCE_LABELS and 0 in id2label.keys():
+    CLASS_LOSS_WEIGHTS.append(CLASS_LOSS_WEIGHTS.pop(0))
 
 KEYS_TO_LOAD = [
     Keys.images,                # note: images, shape (1, 3, H, W), uint8 (RGB)
@@ -54,7 +95,7 @@ KEYS_TO_LOAD = [
     # Keys.depth_maps,            # note: depth maps, shape (1, H, W), float (meters)
 ]
 
-metric = SHIFTSegformerEvalMetrics(ignore_class_ids={255})
+metric = SHIFTSegformerEvalMetrics(ignore_class_ids=EVAL_IGNORE_IDS)
 
 
 def compute_metrics(eval_pred, calculate_result=True) -> Optional[dict]:
@@ -76,12 +117,15 @@ def compute_metrics(eval_pred, calculate_result=True) -> Optional[dict]:
 
 
 def main(args):
-    model = SegformerForSemanticSegmentation.from_pretrained(
+    model = SHIFTSegformerForSemanticSegmentation.from_pretrained(
         PRETRAINED_MODEL_NAME,
         id2label=id2label,
         label2id=label2id,
         ignore_mismatched_sizes=True,
     )
+    # Set loss weights to the device where loss is calculated
+    loss_weights_tensor = torch.tensor(CLASS_LOSS_WEIGHTS)
+    model.class_loss_weights = loss_weights_tensor.to(device)
 
     train_dataset = SHIFTDataset(
         data_root=args.data_root,
@@ -169,8 +213,8 @@ if __name__ == "__main__":
     parser.add_argument("-es", "--eval-steps", type=int, default=5000, help="Number of steps between eval/checkpoints.")
     parser.add_argument("-ms", "--max-steps", type=int, default=-1, help="Set to limit the number of total training steps.")
     parser.add_argument("-s", "--seed", type=int, default=42, help="Random seed for training.")
-    parser.add_argument("-tf32", "--use-tf32", action="store_true", default=True, help="Set to True if your setup supports TF32 dtype.")
-    parser.add_argument("-mv", "--use-minival", action="store_true", default=True, help="Use the minival validation set.")
+    parser.add_argument("-tf32", "--use-tf32", action="store_true", default=False, help="Set to True if your setup supports TF32 dtype.")
+    parser.add_argument("-mv", "--use-minival", action="store_true", default=False, help="Use the minival validation set.")
     parser.add_argument("-bnb", "--use-adam8bit", action="store_true", default=False, help="Use ADAMW_8BIT optimizer (linux only).")
 
     args = parser.parse_args()

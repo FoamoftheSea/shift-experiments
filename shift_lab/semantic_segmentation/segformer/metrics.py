@@ -1,15 +1,9 @@
+import numpy as np
 from collections import Counter
 from typing import Set, Optional
 
-import numpy as np
-import torch
-from torch import nn
+from shift_lab.semantic_segmentation.shift_labels import id2label
 
-from shift_lab.semantic_segmentation.labels import id2label
-
-
-# from torchmetrics import Metric
-# from torchmetrics.classification import Accuracy
 
 class SHIFTSegformerEvalMetrics:
     def __init__(self, ignore_class_ids: Optional[Set[int]] = None):
