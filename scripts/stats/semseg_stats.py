@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from PIL import Image
 
-from shift_lab.semantic_segmentation.labels import id2label
+from shift_lab.semantic_segmentation.shift_labels import id2label
 
 
 def get_frame_counts(mask_path) -> dict:
