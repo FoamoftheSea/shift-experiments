@@ -6,20 +6,26 @@ from shift_lab.semantic_segmentation.shift_labels import id2label
 
 
 class SHIFTSegformerEvalMetrics:
-    def __init__(self, ignore_class_ids: Optional[Set[int]] = None):
+    def __init__(self, ignore_class_ids: Optional[Set[int]] = None, reduced_labels: bool = False):
         self.total_area_intersect = Counter()
         self.total_area_union = Counter()
         self.total_label_area = Counter()
         self.ignore_class_ids = ignore_class_ids or set()
+        self.reduced_labels = reduced_labels
 
     def update(self, pred_labels: np.ndarray, gt_labels: np.ndarray):
 
-        for class_id in np.unique(gt_labels):
+        for label_id in np.unique(gt_labels):
+            # Restore original non-reduced ontology if needed
+            if self.reduced_labels:
+                class_id = label_id + 1 if label_id != 255 else 0
+            else:
+                class_id = label_id
             if class_id in self.ignore_class_ids:
                 continue
+            pred_pixels = pred_labels == label_id
+            gt_pixels = gt_labels == label_id
             class_label = id2label[class_id]
-            pred_pixels = pred_labels == class_id
-            gt_pixels = gt_labels == class_id
             self.total_area_intersect.update({class_label: np.sum(np.bitwise_and(pred_pixels, gt_pixels))})
             self.total_area_union.update({class_label: np.sum(np.bitwise_or(pred_pixels, gt_pixels))})
             self.total_label_area.update({class_label: np.sum(gt_pixels)})

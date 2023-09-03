@@ -38,10 +38,6 @@ IMAGE_TRANSFORMS = [
 FRAME_TRANSFORMS = []
 EVAL_FULL_RES = True
 DO_REDUCE_LABELS = True
-if DO_REDUCE_LABELS:
-    EVAL_IGNORE_IDS.remove(0)
-    EVAL_IGNORE_IDS = {cid - 1 for cid in EVAL_IGNORE_IDS}
-    EVAL_IGNORE_IDS.add(255)
 
 image_size = {"height": 512, "width": 1024}
 image_processor_train = SegformerImageProcessor.from_pretrained(PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS)
@@ -79,23 +75,23 @@ if DO_REDUCE_LABELS and 0 in id2label.keys():
     CLASS_LOSS_WEIGHTS.append(CLASS_LOSS_WEIGHTS.pop(0))
 
 KEYS_TO_LOAD = [
-    Keys.images,                # note: images, shape (1, 3, H, W), uint8 (RGB)
-    Keys.intrinsics,            # note: camera intrinsics, shape (3, 3)
+    Keys.images,                # images, shape (1, 3, H, W), uint8 (RGB)
+    Keys.intrinsics,            # camera intrinsics, shape (3, 3)
     Keys.timestamp,
     Keys.axis_mode,
     Keys.extrinsics,
-    Keys.boxes2d,               # note: 2D boxes in image coordinate, (x1, y1, x2, y2)
-    Keys.boxes2d_classes,       # note: class indices, shape (num_boxes,)
-    Keys.boxes2d_track_ids,     # note: object ids, shape (num_ins,)
-    # Keys.boxes3d,               # note: 3D boxes in camera coordinate, (x, y, z, dim_x, dim_y, dim_z, rot_x, rot_y, rot_z)
-    # Keys.boxes3d_classes,       # note: class indices, shape (num_boxes,), the same as 'boxes2d_classes'
-    # Keys.boxes3d_track_ids,     # note: object ids, shape (num_ins,), the same as 'boxes2d_track_ids'
-    Keys.segmentation_masks,    # note: semantic masks, shape (1, H, W), long
-    # Keys.masks,                 # note: instance masks, shape (num_ins, H, W), binary
-    # Keys.depth_maps,            # note: depth maps, shape (1, H, W), float (meters)
+    Keys.boxes2d,               # 2D boxes in image coordinate, (x1, y1, x2, y2)
+    Keys.boxes2d_classes,       # class indices, shape (num_boxes,)
+    Keys.boxes2d_track_ids,     # object ids, shape (num_ins,)
+    # Keys.boxes3d,               # 3D boxes in camera coordinate, (x, y, z, dim_x, dim_y, dim_z, rot_x, rot_y, rot_z)
+    # Keys.boxes3d_classes,       # class indices, shape (num_boxes,), the same as 'boxes2d_classes'
+    # Keys.boxes3d_track_ids,     # object ids, shape (num_ins,), the same as 'boxes2d_track_ids'
+    Keys.segmentation_masks,    # semantic masks, shape (1, H, W), long
+    # Keys.masks,                 # instance masks, shape (num_ins, H, W), binary
+    # Keys.depth_maps,            # depth maps, shape (1, H, W), float (meters)
 ]
 
-metric = SHIFTSegformerEvalMetrics(ignore_class_ids=EVAL_IGNORE_IDS)
+metric = SHIFTSegformerEvalMetrics(ignore_class_ids=EVAL_IGNORE_IDS, reduced_labels=DO_REDUCE_LABELS)
 
 
 def compute_metrics(eval_pred, calculate_result=True) -> Optional[dict]:
