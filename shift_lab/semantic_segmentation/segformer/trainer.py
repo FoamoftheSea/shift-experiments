@@ -4,17 +4,18 @@ import numpy as np
 import torch
 from packaging import version
 from torch import nn
+from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss
 from torch.utils.data import DataLoader, Dataset
-# from torchmetrics import Metric
-# from torchmetrics.classification import Accuracy
 from transformers import (
     TrainingArguments,
     Trainer,
     EvalPrediction,
     is_apex_available,
+    SegformerForSemanticSegmentation,
 )
 from transformers.data.data_collator import DataCollator
 from transformers.deepspeed import deepspeed_init
+from transformers.modeling_outputs import SemanticSegmenterOutput
 from transformers.modeling_utils import PreTrainedModel
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_callback import (
@@ -31,11 +32,15 @@ from transformers.trainer_utils import (
     denumpify_detensorize,
     has_length,
 )
-from transformers.utils import is_torch_tpu_available, logging, is_sagemaker_mp_enabled
+from transformers.utils import is_torch_tpu_available, logging, is_sagemaker_mp_enabled, is_peft_available
+
 logger = logging.get_logger(__name__)
 
 if is_apex_available():
     from apex import amp
+
+if is_peft_available():
+    from peft import PeftModel
 
 if is_torch_tpu_available(check_device=False):
     import torch_xla.core.xla_model as xm
@@ -49,6 +54,74 @@ if is_sagemaker_mp_enabled():
     from transformers.trainer_pt_utils import smp_forward_backward, smp_forward_only, smp_gather, smp_nested_concat
 else:
     IS_SAGEMAKER_MP_POST_1_10 = False
+
+
+class SHIFTSegformerForSemanticSegmentation(SegformerForSemanticSegmentation):
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.class_loss_weights = None
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    def forward(
+        self,
+        pixel_values: torch.FloatTensor,
+        labels: Optional[torch.LongTensor] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, SemanticSegmenterOutput]:
+
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+
+        outputs = self.segformer(
+            pixel_values,
+            output_attentions=output_attentions,
+            output_hidden_states=True,  # we need the intermediate hidden states
+            return_dict=return_dict,
+        )
+
+        encoder_hidden_states = outputs.hidden_states if return_dict else outputs[1]
+
+        logits = self.decode_head(encoder_hidden_states)
+
+        loss = None
+        if labels is not None:
+            # upsample logits to the images' original size
+            upsampled_logits = nn.functional.interpolate(
+                logits, size=labels.shape[-2:], mode="bilinear", align_corners=False
+            )
+            if self.config.num_labels > 1:
+                loss_fct = CrossEntropyLoss(
+                    ignore_index=self.config.semantic_loss_ignore_index,
+                    weight=self.class_loss_weights
+                )
+                loss = loss_fct(upsampled_logits, labels)
+            elif self.config.num_labels == 1:
+                valid_mask = ((labels >= 0) & (labels != self.config.semantic_loss_ignore_index)).float()
+                loss_fct = BCEWithLogitsLoss(reduction="none")
+                loss = loss_fct(upsampled_logits.squeeze(1), labels.float())
+                loss = (loss * valid_mask).mean()
+            else:
+                raise ValueError(f"Number of labels should be >=0: {self.config.num_labels}")
+
+        if not return_dict:
+            if output_hidden_states:
+                output = (logits,) + outputs[1:]
+            else:
+                output = (logits,) + outputs[2:]
+            return ((loss,) + output) if loss is not None else output
+
+        return SemanticSegmenterOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=outputs.hidden_states if output_hidden_states else None,
+            attentions=outputs.attentions,
+        )
 
 
 class SHIFTSegformerTrainer(Trainer):

@@ -8,7 +8,6 @@ from shift_dev.types import Keys
 from shift_dev.utils.backend import FileBackend
 from torchvision.transforms import v2
 from transformers import (
-    SegformerForSemanticSegmentation,
     SegformerImageProcessor,
     TrainingArguments,
 )
@@ -17,10 +16,15 @@ from transformers.utils import logging
 
 from shift_lab.semantic_segmentation.shift_labels import id2label
 from shift_lab.semantic_segmentation.segformer.metrics import SHIFTSegformerEvalMetrics
-from shift_lab.semantic_segmentation.segformer.trainer import SHIFTSegformerTrainer
+from shift_lab.semantic_segmentation.segformer.trainer import (
+    SHIFTSegformerTrainer,
+    SHIFTSegformerForSemanticSegmentation,
+)
 
 logger = logging.get_logger(__name__)
 logger.setLevel(logging.DEBUG)
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 # Omitting these classes from eval in accordance with Cityscapes
 EVAL_IGNORE_IDS = {k for k, v in id2label.items() if v.ignoreInEval}
@@ -68,18 +72,11 @@ CLASS_LOSS_WEIGHTS = {
     'rail track': 0.047465059495701845,
     'water': 0.04760968530230659,
     'bridge': 0.04740893878924414,
+    'unlabeled': 0.0,
 }
-CLASS_LOSS_WEIGHTS = {
-    label2id[id2label[cid]]: CLASS_LOSS_WEIGHTS[id2label[cid]]
-    for cid in sorted(id2label.keys())
-}
-if DO_REDUCE_LABELS:
-    for cid in CLASS_LOSS_WEIGHTS:
-        CLASS_LOSS_WEIGHTS[cid - 1] = CLASS_LOSS_WEIGHTS.pop(cid)
-    try:
-        CLASS_LOSS_WEIGHTS[255] = CLASS_LOSS_WEIGHTS.pop(-1)
-    except KeyError:
-        ...
+CLASS_LOSS_WEIGHTS = [CLASS_LOSS_WEIGHTS[id2label[cid]] for cid in sorted(id2label.keys())]
+if DO_REDUCE_LABELS and 0 in id2label.keys():
+    CLASS_LOSS_WEIGHTS.append(CLASS_LOSS_WEIGHTS.pop(0))
 
 KEYS_TO_LOAD = [
     Keys.images,                # note: images, shape (1, 3, H, W), uint8 (RGB)
@@ -120,12 +117,15 @@ def compute_metrics(eval_pred, calculate_result=True) -> Optional[dict]:
 
 
 def main(args):
-    model = SegformerForSemanticSegmentation.from_pretrained(
+    model = SHIFTSegformerForSemanticSegmentation.from_pretrained(
         PRETRAINED_MODEL_NAME,
         id2label=id2label,
         label2id=label2id,
         ignore_mismatched_sizes=True,
     )
+    # Set loss weights to the device where loss is calculated
+    loss_weights_tensor = torch.tensor(CLASS_LOSS_WEIGHTS)
+    model.class_loss_weights = loss_weights_tensor.to(device)
 
     train_dataset = SHIFTDataset(
         data_root=args.data_root,
@@ -213,8 +213,8 @@ if __name__ == "__main__":
     parser.add_argument("-es", "--eval-steps", type=int, default=5000, help="Number of steps between eval/checkpoints.")
     parser.add_argument("-ms", "--max-steps", type=int, default=-1, help="Set to limit the number of total training steps.")
     parser.add_argument("-s", "--seed", type=int, default=42, help="Random seed for training.")
-    parser.add_argument("-tf32", "--use-tf32", action="store_true", default=True, help="Set to True if your setup supports TF32 dtype.")
-    parser.add_argument("-mv", "--use-minival", action="store_true", default=True, help="Use the minival validation set.")
+    parser.add_argument("-tf32", "--use-tf32", action="store_true", default=False, help="Set to True if your setup supports TF32 dtype.")
+    parser.add_argument("-mv", "--use-minival", action="store_true", default=False, help="Use the minival validation set.")
     parser.add_argument("-bnb", "--use-adam8bit", action="store_true", default=False, help="Use ADAMW_8BIT optimizer (linux only).")
 
     args = parser.parse_args()
