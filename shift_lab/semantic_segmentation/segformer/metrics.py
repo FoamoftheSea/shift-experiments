@@ -15,14 +15,13 @@ class SHIFTSegformerEvalMetrics:
 
     def update(self, pred_labels: np.ndarray, gt_labels: np.ndarray):
 
-        for label_id in np.unique(gt_labels):
-            # Restore original non-reduced ontology if needed
-            if self.reduced_labels:
-                class_id = label_id + 1 if label_id != 255 else 0
-            else:
-                class_id = label_id
+        for class_id in id2label.keys():
             if class_id in self.ignore_class_ids:
                 continue
+            if self.reduced_labels:
+                label_id = class_id - 1 if class_id != 0 else 255
+            else:
+                label_id = class_id
             pred_pixels = pred_labels == label_id
             gt_pixels = gt_labels == label_id
             class_label = id2label[class_id]
