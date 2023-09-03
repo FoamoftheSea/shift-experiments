@@ -167,6 +167,7 @@ def main(args):
         max_steps=args.max_steps,
         tf32=args.use_tf32,
         optim=OptimizerNames.ADAMW_8BIT if args.use_adam8bit else OptimizerNames.ADAMW_TORCH,
+        dataloader_pin_memory=False if args.workers > 0 else True,
         # lr_scheduler_type=SchedulerType.COSINE,
         # push_to_hub=True,
         # hub_model_id=hub_model_id,
