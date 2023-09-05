@@ -118,6 +118,7 @@ def main(args):
         id2label=id2label,
         label2id=label2id,
         ignore_mismatched_sizes=True,
+        train_depth=False,  # In dev
     )
     # Set loss weights to the device where loss is calculated
     loss_weights_tensor = torch.tensor(CLASS_LOSS_WEIGHTS)

@@ -17,6 +17,7 @@ from transformers.data.data_collator import DataCollator
 from transformers.deepspeed import deepspeed_init
 from transformers.modeling_outputs import SemanticSegmenterOutput
 from transformers.modeling_utils import PreTrainedModel
+from transformers.models.glpn.modeling_glpn import GLPNDecoder, GLPNDepthEstimationHead, SiLogLoss
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_callback import (
     TrainerCallback,
@@ -58,9 +59,13 @@ else:
 
 class SHIFTSegformerForSemanticSegmentation(SegformerForSemanticSegmentation):
 
-    def __init__(self, config):
+    def __init__(self, config, **kwargs):
         super().__init__(config)
         self.class_loss_weights = None
+        if "train_depth" in kwargs and kwargs["train_depth"]:
+            self.train_depth = True
+            self.depth_decoder = GLPNDecoder(config)
+            self.depth_head = GLPNDepthEstimationHead(config)
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -88,6 +93,9 @@ class SHIFTSegformerForSemanticSegmentation(SegformerForSemanticSegmentation):
         encoder_hidden_states = outputs.hidden_states if return_dict else outputs[1]
 
         logits = self.decode_head(encoder_hidden_states)
+        if self.train_depth:
+            depth_decoder_out = self.depth_decoder(encoder_hidden_states)
+            predicted_depth = self.depth_head(depth_decoder_out)
 
         loss = None
         if labels is not None:
@@ -108,6 +116,10 @@ class SHIFTSegformerForSemanticSegmentation(SegformerForSemanticSegmentation):
                 loss = (loss * valid_mask).mean()
             else:
                 raise ValueError(f"Number of labels should be >=0: {self.config.num_labels}")
+
+            if self.train_depth:
+                loss_fct = SiLogLoss()
+                loss = loss + loss_fct(predicted_depth, labels)
 
         if not return_dict:
             if output_hidden_states:
