@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple, Union, Any
 
 import numpy as np
@@ -12,6 +13,7 @@ from transformers import (
     EvalPrediction,
     is_apex_available,
     SegformerForSemanticSegmentation,
+    GLPNConfig,
 )
 from transformers.data.data_collator import DataCollator
 from transformers.deepspeed import deepspeed_init
@@ -56,6 +58,10 @@ if is_sagemaker_mp_enabled():
 else:
     IS_SAGEMAKER_MP_POST_1_10 = False
 
+@dataclass
+class SHIFTSemanticSegmenterOutput(SemanticSegmenterOutput):
+    depth: Optional[torch.FloatTensor] = None
+
 
 class SHIFTSegformerForSemanticSegmentation(SegformerForSemanticSegmentation):
 
@@ -64,8 +70,29 @@ class SHIFTSegformerForSemanticSegmentation(SegformerForSemanticSegmentation):
         self.class_loss_weights = None
         if "train_depth" in kwargs and kwargs["train_depth"]:
             self.train_depth = True
-            self.depth_decoder = GLPNDecoder(config)
-            self.depth_head = GLPNDepthEstimationHead(config)
+            self.depth_config = GLPNConfig(
+                num_channels=self.config.num_channels,
+                num_encoder_blocks=self.config.num_encoder_blocks,
+                depths=self.config.depths,
+                sr_ratios=self.config.sr_ratios,
+                hidden_sizes=self.config.hidden_sizes,
+                patch_sizes=self.config.patch_sizes,
+                strides=self.config.strides,
+                num_attention_heads=self.config.num_attention_heads,
+                mlp_ratios=self.config.mlp_ratios,
+                hidden_act=self.config.hidden_act,
+                hidden_dropout_prob=self.config.hidden_dropout_prob,
+                attention_probs_dropout_prob=self.config.attention_probs_dropout_prob,
+                initializer_range=self.config.initializer_range,
+                drop_path_rate=self.config.drop_path_rate,
+                layer_norm_eps=self.config.layer_norm_eps,
+                decoder_hidden_size=64,
+                max_depth=10,
+                head_in_index=-1,
+            )
+            self.depth_decoder = GLPNDecoder(self.depth_config)
+            self.depth_head = GLPNDepthEstimationHead(self.depth_config)
+
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -73,6 +100,7 @@ class SHIFTSegformerForSemanticSegmentation(SegformerForSemanticSegmentation):
         self,
         pixel_values: torch.FloatTensor,
         labels: Optional[torch.LongTensor] = None,
+        depth: Optional = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
@@ -96,6 +124,8 @@ class SHIFTSegformerForSemanticSegmentation(SegformerForSemanticSegmentation):
         if self.train_depth:
             depth_decoder_out = self.depth_decoder(encoder_hidden_states)
             predicted_depth = self.depth_head(depth_decoder_out)
+        else:
+            predicted_depth = None
 
         loss = None
         if labels is not None:
@@ -119,7 +149,7 @@ class SHIFTSegformerForSemanticSegmentation(SegformerForSemanticSegmentation):
 
             if self.train_depth:
                 loss_fct = SiLogLoss()
-                loss = loss + loss_fct(predicted_depth, labels)
+                loss = loss + loss_fct(predicted_depth, depth)
 
         if not return_dict:
             if output_hidden_states:
@@ -128,9 +158,10 @@ class SHIFTSegformerForSemanticSegmentation(SegformerForSemanticSegmentation):
                 output = (logits,) + outputs[2:]
             return ((loss,) + output) if loss is not None else output
 
-        return SemanticSegmenterOutput(
+        return SHIFTSemanticSegmenterOutput(
             loss=loss,
             logits=logits,
+            depth=predicted_depth,
             hidden_states=outputs.hidden_states if output_hidden_states else None,
             attentions=outputs.attentions,
         )
