@@ -92,6 +92,8 @@ class SHIFTSegformerForSemanticSegmentation(SegformerForSemanticSegmentation):
             )
             self.depth_decoder = GLPNDecoder(self.depth_config)
             self.depth_head = GLPNDepthEstimationHead(self.depth_config)
+        else:
+            self.train_depth = False
 
         # Initialize weights and apply final processing
         self.post_init()
