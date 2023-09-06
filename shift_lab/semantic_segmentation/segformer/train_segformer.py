@@ -1,6 +1,7 @@
 from typing import Optional
 
 import torch
+import wandb
 from argparse import ArgumentParser
 
 from shift_dev import SHIFTDataset
@@ -124,6 +125,15 @@ def main(args):
     loss_weights_tensor = torch.tensor(CLASS_LOSS_WEIGHTS)
     model.class_loss_weights = loss_weights_tensor.to(device)
 
+    image_processor_train = SegformerImageProcessor.from_pretrained(
+        PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS
+    )
+    image_processor_train.size = TRAIN_IMAGE_SIZE
+    image_processor_val = SegformerImageProcessor.from_pretrained(
+        PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS
+    )
+    image_processor_val.size = TRAIN_IMAGE_SIZE
+
     train_dataset = SHIFTDataset(
         data_root=args.data_root,
         split="train",
@@ -195,7 +205,7 @@ def main(args):
         eval_dataset=val_dataset,
         compute_metrics=compute_metrics,
     )
-    trainer.train()
+    trainer.train(resume_from_checkpoint=args.checkpoint)
 
 
 if __name__ == "__main__":
@@ -214,6 +224,8 @@ if __name__ == "__main__":
     parser.add_argument("-tf32", "--use-tf32", action="store_true", default=False, help="Set to True if your setup supports TF32 dtype.")
     parser.add_argument("-mv", "--use-minival", action="store_true", default=False, help="Use the minival validation set.")
     parser.add_argument("-bnb", "--use-adam8bit", action="store_true", default=False, help="Use ADAMW_8BIT optimizer (linux only).")
+    parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Path to checpoint to resume training.")
+    parser.add_argument("-rwb", "--resume-wandb", type=str, default=None, help="ID of run to resume")
 
     args = parser.parse_args()
     if args.eval_batch_size is None:
@@ -223,5 +235,8 @@ if __name__ == "__main__":
         logger.info("Using TF32 dtype.")
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
+
+    if args.resume_wandb:
+        wandb.init(project="huggingface", resume="must", id=args.resume_wandb)
 
     main(args)
