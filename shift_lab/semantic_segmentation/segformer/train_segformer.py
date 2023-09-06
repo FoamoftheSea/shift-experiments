@@ -32,19 +32,18 @@ EVAL_IGNORE_IDS = {k for k, v in id2label.items() if v.ignoreInEval}
 id2label = {k: v.name for k, v in id2label.items()}
 label2id = {v: k for k, v in id2label.items()}
 
-PRETRAINED_MODEL_NAME = "nvidia/segformer-b0-finetuned-cityscapes-512-1024"
+# PRETRAINED_MODEL_NAME = "nvidia/segformer-b0-finetuned-cityscapes-512-1024"
+# PRETRAINED_MODEL_NAME = "nvidia/segformer-b0-finetuned-cityscapes-768-768"
+PRETRAINED_MODEL_NAME = "nvidia/segformer-b0-finetuned-cityscapes-640-1280"
 IMAGE_TRANSFORMS = [
     v2.ColorJitter(brightness=0.25, contrast=0.25, saturation=0.25, hue=0.1),
 ]
 FRAME_TRANSFORMS = []
+TRAIN_FULL_RES = True
 EVAL_FULL_RES = True
 DO_REDUCE_LABELS = True
-
-image_size = {"height": 512, "width": 1024}
-image_processor_train = SegformerImageProcessor.from_pretrained(PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS)
-image_processor_train.size = image_size
-image_processor_val = SegformerImageProcessor.from_pretrained(PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS)
-image_processor_val.size = image_size
+# Size of image passed to train/val if not FULL_RES
+TRAIN_IMAGE_SIZE = {"height": 800, "width": 1280}
 
 CLASS_LOSS_WEIGHTS = {
     'building': 0.04222825955577863,
@@ -145,6 +144,7 @@ def main(args):
         image_transforms=IMAGE_TRANSFORMS,
         frame_transforms=FRAME_TRANSFORMS,
         image_processor=image_processor_train,
+        load_full_res=TRAIN_FULL_RES,
     )
 
     val_dataset = SHIFTDataset(
@@ -156,7 +156,7 @@ def main(args):
         backend=FileBackend(),
         verbose=True,
         image_processor=image_processor_val,
-        eval_full_res=EVAL_FULL_RES,
+        load_full_res=EVAL_FULL_RES,
     )
 
     training_args = TrainingArguments(
