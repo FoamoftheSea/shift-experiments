@@ -114,11 +114,11 @@ def compute_metrics(eval_pred, calculate_result=True) -> Optional[dict]:
 
 def main(args):
     model = SHIFTSegformerForSemanticSegmentation.from_pretrained(
-        PRETRAINED_MODEL_NAME,
+        args.checkpoint if args.checkpoint is not None else PRETRAINED_MODEL_NAME,
         id2label=id2label,
         label2id=label2id,
         ignore_mismatched_sizes=True,
-        train_depth=False,  # In dev
+        train_depth=args.train_depth,  # In dev
     )
     # Set loss weights to the device where loss is calculated
     loss_weights_tensor = torch.tensor(CLASS_LOSS_WEIGHTS)
@@ -169,7 +169,7 @@ def main(args):
         save_total_limit=3,
         evaluation_strategy="steps",
         save_strategy="steps",
-        save_steps=args.eval_steps,
+        save_steps=args.save_steps,
         eval_steps=args.eval_steps,
         logging_steps=1,
         load_best_model_at_end=True,
@@ -205,7 +205,10 @@ def main(args):
         eval_dataset=val_dataset,
         compute_metrics=compute_metrics,
     )
-    trainer.train(resume_from_checkpoint=args.checkpoint)
+    if args.eval_only:
+        trainer.evaluate()
+    else:
+        trainer.train()
 
 
 if __name__ == "__main__":
@@ -218,7 +221,8 @@ if __name__ == "__main__":
     parser.add_argument("-bs", "--batch-size", type=int, default=4, help="Train batch size.")
     parser.add_argument("-ebs", "--eval-batch-size", type=int, default=None, help="Eval batch size. Defaults to train batch size.")
     parser.add_argument("-gas", "--gradient-accumulation-steps", type=int, default=2, help="Number of gradient accumulation steps.")
-    parser.add_argument("-es", "--eval-steps", type=int, default=5000, help="Number of steps between eval/checkpoints.")
+    parser.add_argument("-es", "--eval-steps", type=int, default=5000, help="Number of steps between validation runs.")
+    parser.add_argument("-ss", "--save-steps", type=int, default=None, help="Number of steps between checkpoints. Defaults to eval steps.")
     parser.add_argument("-ms", "--max-steps", type=int, default=-1, help="Set to limit the number of total training steps.")
     parser.add_argument("-s", "--seed", type=int, default=42, help="Random seed for training.")
     parser.add_argument("-tf32", "--use-tf32", action="store_true", default=False, help="Set to True if your setup supports TF32 dtype.")
@@ -226,10 +230,14 @@ if __name__ == "__main__":
     parser.add_argument("-bnb", "--use-adam8bit", action="store_true", default=False, help="Use ADAMW_8BIT optimizer (linux only).")
     parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Path to checpoint to resume training.")
     parser.add_argument("-rwb", "--resume-wandb", type=str, default=None, help="ID of run to resume")
+    parser.add_argument("-eval", "--eval-only", action="store_true", default=False, help="Only run evaluation step.")
+    parser.add_argument("-td", "--train-depth", action="store_true", default=False, help="Train depth head.")
 
     args = parser.parse_args()
     if args.eval_batch_size is None:
         args.eval_batch_size = args.batch_size
+    if args.save_steps is None:
+        args.save_steps = args.eval_steps
 
     if args.use_tf32:
         logger.info("Using TF32 dtype.")
