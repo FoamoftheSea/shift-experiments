@@ -28,6 +28,7 @@ from transformers.trainer_pt_utils import (
     IterableDatasetShard,
     find_batch_size,
     nested_concat,
+    nested_detach,
     nested_numpify,
 )
 from transformers.trainer_utils import (
@@ -58,9 +59,10 @@ if is_sagemaker_mp_enabled():
 else:
     IS_SAGEMAKER_MP_POST_1_10 = False
 
+
 @dataclass
 class SHIFTSemanticSegmenterOutput(SemanticSegmenterOutput):
-    depth: Optional[torch.FloatTensor] = None
+    depth_pred: Optional[torch.FloatTensor] = None
 
 
 class SHIFTSegformerForSemanticSegmentation(SegformerForSemanticSegmentation):
@@ -102,7 +104,7 @@ class SHIFTSegformerForSemanticSegmentation(SegformerForSemanticSegmentation):
         self,
         pixel_values: torch.FloatTensor,
         labels: Optional[torch.LongTensor] = None,
-        depth: Optional = None,
+        depth_labels: Optional = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
@@ -151,7 +153,7 @@ class SHIFTSegformerForSemanticSegmentation(SegformerForSemanticSegmentation):
 
             if self.train_depth:
                 loss_fct = SiLogLoss()
-                loss = loss + loss_fct(predicted_depth, depth)
+                loss = loss + loss_fct(predicted_depth, depth_labels)
 
         if not return_dict:
             if output_hidden_states:
@@ -163,7 +165,7 @@ class SHIFTSegformerForSemanticSegmentation(SegformerForSemanticSegmentation):
         return SHIFTSemanticSegmenterOutput(
             loss=loss,
             logits=logits,
-            depth=predicted_depth,
+            depth_pred=predicted_depth,
             hidden_states=outputs.hidden_states if output_hidden_states else None,
             attentions=outputs.attentions,
         )
@@ -339,7 +341,7 @@ class SHIFTSegformerTrainer(Trainer):
                     batch_size = observed_batch_size
 
             # Prediction step
-            loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
+            loss, preds, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
             main_input_name = getattr(self.model, "main_input_name", "input_ids")
             inputs_decode = self._prepare_input(inputs[main_input_name]) if args.include_inputs_for_metrics else None
 
@@ -360,12 +362,12 @@ class SHIFTSegformerTrainer(Trainer):
                     if inputs_host is None
                     else nested_concat(inputs_host, inputs_decode, padding_index=-100)
                 )
-            if logits is not None:
-                logits = self.accelerator.pad_across_processes(logits, dim=1, pad_index=-100)
+            if preds is not None:
+                preds = self.accelerator.pad_across_processes(preds, dim=1, pad_index=-100)
                 if self.preprocess_logits_for_metrics is not None:
-                    logits = self.preprocess_logits_for_metrics(logits, labels)
-                logits = self.accelerator.gather_for_metrics((logits))
-                preds_host = logits if preds_host is None else nested_concat(preds_host, logits, padding_index=-100)
+                    preds = self.preprocess_logits_for_metrics(preds, labels)
+                preds = self.accelerator.gather_for_metrics((preds))
+                preds_host = preds if preds_host is None else nested_concat(preds_host, preds, padding_index=-100)
 
             if labels is not None:
                 labels = self.accelerator.gather_for_metrics((labels))
@@ -410,8 +412,8 @@ class SHIFTSegformerTrainer(Trainer):
                     losses = nested_numpify(losses_host)
                     all_losses = losses if all_losses is None else np.concatenate((all_losses, losses), axis=0)
                 if preds_host is not None:
-                    logits = nested_numpify(preds_host)
-                    all_preds = logits if all_preds is None else nested_concat(all_preds, logits, padding_index=-100)
+                    preds = nested_numpify(preds_host)
+                    all_preds = preds if all_preds is None else nested_concat(all_preds, preds, padding_index=-100)
                 if inputs_host is not None:
                     inputs_decode = nested_numpify(inputs_host)
                     all_inputs = (
@@ -437,8 +439,8 @@ class SHIFTSegformerTrainer(Trainer):
             losses = nested_numpify(losses_host)
             all_losses = losses if all_losses is None else np.concatenate((all_losses, losses), axis=0)
         if preds_host is not None:
-            logits = nested_numpify(preds_host)
-            all_preds = logits if all_preds is None else nested_concat(all_preds, logits, padding_index=-100)
+            preds = nested_numpify(preds_host)
+            all_preds = preds if all_preds is None else nested_concat(all_preds, preds, padding_index=-100)
         if inputs_host is not None:
             inputs_decode = nested_numpify(inputs_host)
             all_inputs = (
@@ -467,10 +469,14 @@ class SHIFTSegformerTrainer(Trainer):
         if self.compute_metrics is not None and all_preds is not None and all_labels is not None:
             if args.include_inputs_for_metrics:
                 metrics = self.compute_metrics(
-                    EvalPrediction(predictions=all_preds, label_ids=all_labels, inputs=all_inputs)
+                    EvalPrediction(predictions=all_preds, label_ids=all_labels, inputs=all_inputs),
+                    calculate_results=is_last_batch,
                 )
             else:
-                metrics = self.compute_metrics(EvalPrediction(predictions=all_preds, label_ids=all_labels))
+                metrics = self.compute_metrics(
+                    EvalPrediction(predictions=all_preds, label_ids=all_labels),
+                    calculate_result=is_last_batch,
+                )
         elif metrics is None:
             metrics = {}
 
@@ -488,3 +494,109 @@ class SHIFTSegformerTrainer(Trainer):
                 metrics[f"{metric_key_prefix}_{key}"] = metrics.pop(key)
 
         return EvalLoopOutput(predictions=all_preds, label_ids=all_labels, metrics=metrics, num_samples=num_samples)
+
+    def prediction_step(
+        self,
+        model: nn.Module,
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        prediction_loss_only: bool,
+        ignore_keys: Optional[List[str]] = None,
+    ) -> Tuple[Optional[torch.Tensor], Optional[Union[Dict[str, torch.Tensor], torch.Tensor]], Optional[torch.Tensor]]:
+        """
+        Perform an evaluation step on `model` using `inputs`.
+
+        Subclass and override to inject custom behavior.
+
+        Args:
+            model (`nn.Module`):
+                The model to evaluate.
+            inputs (`Dict[str, Union[torch.Tensor, Any]]`):
+                The inputs and targets of the model.
+
+                The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
+                argument `labels`. Check your model's documentation for all accepted arguments.
+            prediction_loss_only (`bool`):
+                Whether or not to return the loss only.
+            ignore_keys (`List[str]`, *optional*):
+                A list of keys in the output of your model (if it is a dictionary) that should be ignored when
+                gathering predictions.
+
+        Return:
+            Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]: A tuple with the loss,
+            raw_predisctions, and labels (each being optional).
+        """
+        provided_labels = [k for k in self.label_names if inputs.get(k) is not None]
+        has_labels = False if len(self.label_names) == 0 else len(provided_labels) > 0
+        # For CLIP-like models capable of returning loss values.
+        # If `return_loss` is not specified or being `None` in `inputs`, we check if the default value of `return_loss`
+        # is `True` in `model.forward`.
+        return_loss = inputs.get("return_loss", None)
+        if return_loss is None:
+            return_loss = self.can_return_loss
+        loss_without_labels = True if len(self.label_names) == 0 and return_loss else False
+
+        inputs = self._prepare_inputs(inputs)
+        if ignore_keys is None:
+            if hasattr(self.model, "config"):
+                ignore_keys = getattr(self.model.config, "keys_to_ignore_at_inference", [])
+            else:
+                ignore_keys = []
+
+        # labels may be popped when computing the loss (label smoothing for instance) so we grab them first.
+        if has_labels or loss_without_labels:
+            labels = nested_detach({name: inputs.get(name) for name in provided_labels})
+            # if len(labels) == 1:
+            #     labels = labels[0]
+        else:
+            labels = None
+
+        with torch.no_grad():
+            if is_sagemaker_mp_enabled():
+                raw_outputs = smp_forward_only(model, inputs)
+                if has_labels or loss_without_labels:
+                    if isinstance(raw_outputs, dict):
+                        loss_mb = raw_outputs["loss"]
+                        logits_mb = tuple(v for k, v in raw_outputs.items() if k not in ignore_keys + ["loss"])
+                    else:
+                        loss_mb = raw_outputs[0]
+                        logits_mb = raw_outputs[1:]
+
+                    loss = loss_mb.reduce_mean().detach().cpu()
+                    raw_preds = smp_nested_concat(logits_mb)
+                else:
+                    loss = None
+                    if isinstance(raw_outputs, dict):
+                        logits_mb = tuple(v for k, v in raw_outputs.items() if k not in ignore_keys)
+                    else:
+                        logits_mb = raw_outputs
+                    raw_preds = smp_nested_concat(logits_mb)
+            else:
+                if has_labels or loss_without_labels:
+                    with self.compute_loss_context_manager():
+                        loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
+                    loss = loss.mean().detach()
+
+                    if isinstance(outputs, dict):
+                        raw_preds = {k: v for k, v in outputs.items() if k not in ignore_keys + ["loss"]}
+                    else:
+                        raw_preds = outputs[1:]
+                else:
+                    loss = None
+                    with self.compute_loss_context_manager():
+                        outputs = model(**inputs)
+                    if isinstance(outputs, dict):
+                        raw_preds = tuple(v for k, v in outputs.items() if k not in ignore_keys)
+                    else:
+                        raw_preds = outputs
+                    # This needs to be fixed and made cleaner later.
+                    if self.args.past_index >= 0:
+                        self._past = outputs[self.args.past_index - 1]
+
+        if prediction_loss_only:
+            return (loss, None, None)
+
+        raw_preds = nested_detach(raw_preds)
+        # if len(raw_preds) == 1:
+        #     raw_preds = raw_preds[0]
+
+        return (loss, raw_preds, labels)

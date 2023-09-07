@@ -6,6 +6,7 @@ from argparse import ArgumentParser
 
 from shift_dev import SHIFTDataset
 from shift_dev.types import Keys
+from shift_dev.dataloader.image_processors import SegformerMultitaskImageProcessor
 from shift_dev.utils.backend import FileBackend
 from torchvision.transforms import v2
 from transformers import (
@@ -16,7 +17,7 @@ from transformers.training_args import OptimizerNames
 from transformers.utils import logging
 
 from shift_lab.semantic_segmentation.shift_labels import id2label
-from shift_lab.semantic_segmentation.segformer.metrics import SHIFTSegformerEvalMetrics
+from shift_lab.semantic_segmentation.segformer.metrics import SegformerEvalMetrics
 from shift_lab.semantic_segmentation.segformer.trainer import (
     SHIFTSegformerTrainer,
     SHIFTSegformerForSemanticSegmentation,
@@ -74,69 +75,76 @@ CLASS_LOSS_WEIGHTS = [CLASS_LOSS_WEIGHTS[id2label[cid]] for cid in sorted(id2lab
 if DO_REDUCE_LABELS and 0 in id2label.keys():
     CLASS_LOSS_WEIGHTS.append(CLASS_LOSS_WEIGHTS.pop(0))
 
-KEYS_TO_LOAD = [
-    Keys.images,                # images, shape (1, 3, H, W), uint8 (RGB)
-    Keys.intrinsics,            # camera intrinsics, shape (3, 3)
-    Keys.timestamp,
-    Keys.axis_mode,
-    Keys.extrinsics,
-    Keys.boxes2d,               # 2D boxes in image coordinate, (x1, y1, x2, y2)
-    Keys.boxes2d_classes,       # class indices, shape (num_boxes,)
-    Keys.boxes2d_track_ids,     # object ids, shape (num_ins,)
-    # Keys.boxes3d,               # 3D boxes in camera coordinate, (x, y, z, dim_x, dim_y, dim_z, rot_x, rot_y, rot_z)
-    # Keys.boxes3d_classes,       # class indices, shape (num_boxes,), the same as 'boxes2d_classes'
-    # Keys.boxes3d_track_ids,     # object ids, shape (num_ins,), the same as 'boxes2d_track_ids'
-    Keys.segmentation_masks,    # semantic masks, shape (1, H, W), long
-    # Keys.masks,                 # instance masks, shape (num_ins, H, W), binary
-    # Keys.depth_maps,            # depth maps, shape (1, H, W), float (meters)
-]
-
-metric = SHIFTSegformerEvalMetrics(ignore_class_ids=EVAL_IGNORE_IDS, reduced_labels=DO_REDUCE_LABELS)
-
-
-def compute_metrics(eval_pred, calculate_result=True) -> Optional[dict]:
-    with torch.no_grad():
-        logits, labels = eval_pred
-        logits_tensor = torch.from_numpy(logits)
-        # scale the logits to the size of the label
-        logits_tensor = torch.nn.functional.interpolate(
-            logits_tensor,
-            size=labels.shape[-2:],
-            mode="bilinear",
-            align_corners=False,
-        ).argmax(dim=1)
-
-        pred_labels = logits_tensor.detach().cpu().numpy()
-        metric.update(pred_labels, labels)
-
-        return metric.compute() if calculate_result else None
-
 
 def main(args):
+
+    tasks = []
+    if args.semseg:
+        tasks.append("semseg")
+    if args.depth:
+        tasks.append("depth")
+    segformer_metrics = SegformerEvalMetrics(
+        tasks=tasks, semseg_ignore_class_ids=EVAL_IGNORE_IDS, semseg_reduced_labels=DO_REDUCE_LABELS
+    )
+
+    def compute_metrics(eval_pred, calculate_result=True) -> Optional[dict]:
+        task_names = {"logits": "semseg", "depth_pred": "depth"}
+        label_names = {"logits": "labels", "depth_pred": "depth_labels"}
+
+        with torch.no_grad():
+            predictions, labels = eval_pred
+    
+            for pred_name, prediction in predictions.items():
+                label = labels[label_names[pred_name]]
+                segformer_metrics.update(task_names[pred_name], prediction, label)
+    
+            return segformer_metrics.compute() if calculate_result else None
+
     model = SHIFTSegformerForSemanticSegmentation.from_pretrained(
         args.checkpoint if args.checkpoint is not None else PRETRAINED_MODEL_NAME,
         id2label=id2label,
         label2id=label2id,
         ignore_mismatched_sizes=True,
-        train_depth=args.train_depth,  # In dev
+        train_depth=args.depth,  # In dev
     )
     # Set loss weights to the device where loss is calculated
     loss_weights_tensor = torch.tensor(CLASS_LOSS_WEIGHTS)
     model.class_loss_weights = loss_weights_tensor.to(device)
 
-    image_processor_train = SegformerImageProcessor.from_pretrained(
+    image_processor_train = SegformerMultitaskImageProcessor.from_pretrained(
         PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS
     )
     image_processor_train.size = TRAIN_IMAGE_SIZE
-    image_processor_val = SegformerImageProcessor.from_pretrained(
+    image_processor_val = SegformerMultitaskImageProcessor.from_pretrained(
         PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS
     )
     image_processor_val.size = TRAIN_IMAGE_SIZE
 
+    keys_to_load = [
+        Keys.images,  # images, shape (1, 3, H, W), uint8 (RGB)
+        Keys.intrinsics,  # camera intrinsics, shape (3, 3)
+        # Keys.timestamp,
+        # Keys.axis_mode,
+        # Keys.extrinsics,
+        # Keys.boxes2d,               # 2D boxes in image coordinate, (x1, y1, x2, y2)
+        # Keys.boxes2d_classes,       # class indices, shape (num_boxes,)
+        # Keys.boxes2d_track_ids,     # object ids, shape (num_ins,)
+        # Keys.boxes3d,               # 3D boxes in camera coordinate, (x, y, z, dim_x, dim_y, dim_z, rot_x, rot_y, rot_z)
+        # Keys.boxes3d_classes,       # class indices, shape (num_boxes,), the same as 'boxes2d_classes'
+        # Keys.boxes3d_track_ids,     # object ids, shape (num_ins,), the same as 'boxes2d_track_ids'
+        # Keys.segmentation_masks,  # semantic masks, shape (1, H, W), long
+        # Keys.masks,                 # instance masks, shape (num_ins, H, W), binary
+        # Keys.depth_maps,  # depth maps, shape (1, H, W), float (meters)
+    ]
+    if args.semseg:
+        keys_to_load.append(Keys.segmentation_masks)
+    if args.depth:
+        keys_to_load.append(Keys.depth_maps)
+
     train_dataset = SHIFTDataset(
         data_root=args.data_root,
         split="train",
-        keys_to_load=KEYS_TO_LOAD,
+        keys_to_load=keys_to_load,
         views_to_load=["front"],  # SHIFTDataset.VIEWS.remove("center"),
         shift_type="discrete",          # also supports "continuous/1x", "continuous/10x", "continuous/100x"
         backend=FileBackend(),           # also supports HDF5Backend(), FileBackend()
@@ -150,7 +158,7 @@ def main(args):
     val_dataset = SHIFTDataset(
         data_root=args.data_root,
         split="minival" if args.use_minival else "val",
-        keys_to_load=KEYS_TO_LOAD,
+        keys_to_load=keys_to_load,
         views_to_load=["front"],  # SHIFTDataset.VIEWS.remove("center"),
         shift_type="discrete",
         backend=FileBackend(),
@@ -231,7 +239,8 @@ if __name__ == "__main__":
     parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Path to checpoint to resume training.")
     parser.add_argument("-rwb", "--resume-wandb", type=str, default=None, help="ID of run to resume")
     parser.add_argument("-eval", "--eval-only", action="store_true", default=False, help="Only run evaluation step.")
-    parser.add_argument("-td", "--train-depth", action="store_true", default=False, help="Train depth head.")
+    parser.add_argument("-semseg", "--semseg", action="store_true", default=True, help="Train semesg head.")
+    parser.add_argument("-depth", "--depth", action="store_true", default=False, help="Train depth head.")
 
     args = parser.parse_args()
     if args.eval_batch_size is None:
