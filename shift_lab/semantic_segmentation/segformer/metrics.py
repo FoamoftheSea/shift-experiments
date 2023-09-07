@@ -4,7 +4,50 @@ from collections import Counter
 from typing import Set, Optional, List
 
 from shift_lab.semantic_segmentation.shift_labels import id2label
-from transformers.models.glpn.modeling_glpn import SiLogLoss
+
+
+class SiLogLoss(torch.nn.Module):
+    r"""
+    Implements the Scale-invariant log scale loss [Eigen et al., 2014](https://arxiv.org/abs/1406.2283).
+
+    $$L=\frac{1}{n} \sum_{i} d_{i}^{2}-\frac{1}{2 n^{2}}\left(\sum_{i} d_{i}^{2}\right)$$ where $d_{i}=\log y_{i}-\log
+    y_{i}^{*}$.
+
+    """
+
+    def __init__(self, lambd=0.5, log_predictions=True, log_labels=False):
+        super().__init__()
+        self.lambd = lambd
+        self.log_predictions = log_predictions
+        self.log_labels = log_labels
+
+    def forward(self, pred, target):
+        valid_mask = (target > 0).detach()
+        y = target[valid_mask] if self.log_labels else torch.log(target[valid_mask])
+        y_hat = pred[valid_mask] if self.log_predictions else torch.log(pred[valid_mask])
+        diff = y - y_hat
+        loss = torch.sqrt(torch.pow(diff, 2).mean() - self.lambd * torch.pow(diff.mean(), 2))
+
+        return loss
+
+
+class IRMSELoss(torch.nn.Module):
+    r"""
+    Implements the Root Mean Squared Error of Inverse Depth [Eigen et al., 2014](https://arxiv.org/abs/1406.2283).
+    """
+
+    def __init__(self, log_predictions=True, log_labels=False):
+        super().__init__()
+        self.log_predictions = log_predictions
+        self.log_labels = log_labels
+
+    def forward(self, pred, target):
+        valid_mask = (target > 0).detach()
+        y = torch.exp(target[valid_mask]) if self.log_labels else target[valid_mask]
+        y_hat = torch.exp(pred[valid_mask]) if self.log_predictions else pred[valid_mask]
+        irmse = torch.sqrt(torch.pow((1000 / y) - (1000 / y_hat), 2).mean())
+
+        return irmse
 
 
 class SegformerEvalMetrics:
@@ -19,7 +62,10 @@ class SegformerEvalMetrics:
         self.tasks = tasks
         self.metrics = {}
         if "semseg" in tasks:
-            self.metrics["semseg"] = SegformerSemanticSegEvalMetric(ignore_class_ids=semseg_ignore_class_ids, reduced_labels=semseg_reduced_labels)
+            self.metrics["semseg"] = SegformerSemanticSegEvalMetric(
+                ignore_class_ids=semseg_ignore_class_ids,
+                reduced_labels=semseg_reduced_labels
+            )
         if "depth" in tasks:
             self.metrics["depth"] = SegformerDepthEvalMetric()
 
@@ -80,24 +126,32 @@ class SegformerSemanticSegEvalMetric:
 
 
 class SegformerDepthEvalMetric:
-    def __init__(self, silog_lambda=0.5):
+    def __init__(self, silog_lambda=0.5, log_predictions=True, log_labels=False):
         self.batch_mae = []
         self.batch_mse = []
         self.batch_rmse = []
+        self.batch_irmse = []
         self.batch_silog = []
-        self.silog_loss_func = SiLogLoss(silog_lambda)
+        self.irmse_loss = IRMSELoss(log_predictions=log_predictions, log_labels=log_labels)
+        self.silog_loss = SiLogLoss(lambd=silog_lambda, log_predictions=log_predictions, log_labels=log_labels)
+        self.log_predictions = log_predictions
+        self.log_labels = log_labels
 
     def update(self, prediction, label):
-        self.batch_mae.append(np.mean(np.abs(label - prediction)))
-        batch_mse = np.mean(np.power(label - prediction, 2))
+        y = np.exp(label) if self.log_labels else label
+        y_hat = np.exp(prediction) if self.log_predictions else prediction
+        self.batch_mae.append(np.mean(np.abs(y - y_hat)))
+        batch_mse = np.mean(np.power(y - y_hat, 2))
         self.batch_mse.append(batch_mse)
         self.batch_rmse.append(np.sqrt(batch_mse))
-        self.batch_silog.append(self.silog_loss_func(torch.from_numpy(prediction), torch.from_numpy(label)))
+        self.batch_irmse.append(self.irmse_loss(torch.from_numpy(prediction), torch.from_numpy(label)))
+        self.batch_silog.append(self.silog_loss(torch.from_numpy(prediction), torch.from_numpy(label)))
 
     def compute(self):
         return {
             "mae": np.mean(self.batch_mae),
             "mse": np.mean(self.batch_mse),
             "rmse": np.mean(self.batch_rmse),
+            "irmse": np.mean(self.batch_irmse),
             "silog": np.mean(self.batch_silog),
         }

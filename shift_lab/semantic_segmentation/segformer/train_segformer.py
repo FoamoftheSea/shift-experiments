@@ -105,7 +105,9 @@ def main(args):
         id2label=id2label,
         label2id=label2id,
         ignore_mismatched_sizes=True,
-        train_depth=args.depth,  # In dev
+        train_depth=args.depth,
+        do_reduce_labels=DO_REDUCE_LABELS,
+        depth_ignore_semantic_classes=["sky"]
     )
     # Set loss weights to the device where loss is calculated
     loss_weights_tensor = torch.tensor(CLASS_LOSS_WEIGHTS)

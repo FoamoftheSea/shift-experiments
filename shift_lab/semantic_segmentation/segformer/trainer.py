@@ -19,7 +19,7 @@ from transformers.data.data_collator import DataCollator
 from transformers.deepspeed import deepspeed_init
 from transformers.modeling_outputs import SemanticSegmenterOutput
 from transformers.modeling_utils import PreTrainedModel
-from transformers.models.glpn.modeling_glpn import GLPNDecoder, GLPNDepthEstimationHead, SiLogLoss
+from transformers.models.glpn.modeling_glpn import GLPNDecoder, GLPNDepthEstimationHead
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_callback import (
     TrainerCallback,
@@ -37,6 +37,8 @@ from transformers.trainer_utils import (
     has_length,
 )
 from transformers.utils import is_torch_tpu_available, logging, is_sagemaker_mp_enabled, is_peft_available
+
+from shift_lab.semantic_segmentation.segformer.metrics import SiLogLoss
 
 logger = logging.get_logger(__name__)
 
@@ -67,34 +69,42 @@ class SHIFTSemanticSegmenterOutput(SemanticSegmenterOutput):
 
 class MultitaskSegformer(SegformerForSemanticSegmentation):
 
-    def __init__(self, config, **kwargs):
+    def __init__(self, config, do_reduce_labels: Optional[bool] = None, train_depth=False, **kwargs):
         self.class_loss_weights = None
-        if "train_depth" in kwargs and kwargs["train_depth"]:
-            self.train_depth = True
-        else:
-            self.train_depth = False
+        if not hasattr(config, "do_reduce_labels"):
+            config.do_reduce_labels = True if do_reduce_labels is None else do_reduce_labels
+        self.train_depth = train_depth
 
-        if self.train_depth and (not hasattr(config, "depth_config") or config.depth_config is None):
-            config.depth_config = GLPNConfig(
-                num_channels=config.num_channels,
-                num_encoder_blocks=config.num_encoder_blocks,
-                depths=config.depths,
-                sr_ratios=config.sr_ratios,
-                hidden_sizes=config.hidden_sizes,
-                patch_sizes=config.patch_sizes,
-                strides=config.strides,
-                num_attention_heads=config.num_attention_heads,
-                mlp_ratios=config.mlp_ratios,
-                hidden_act=config.hidden_act,
-                hidden_dropout_prob=config.hidden_dropout_prob,
-                attention_probs_dropout_prob=config.attention_probs_dropout_prob,
-                initializer_range=config.initializer_range,
-                drop_path_rate=config.drop_path_rate,
-                layer_norm_eps=config.layer_norm_eps,
-                decoder_hidden_size=64,
-                max_depth=10,
-                head_in_index=-1,
-            )
+        if self.train_depth:
+            if not hasattr(config, "depth_config") or config.depth_config is None:
+                config.depth_config = GLPNConfig(
+                    num_channels=config.num_channels,
+                    num_encoder_blocks=config.num_encoder_blocks,
+                    depths=config.depths,
+                    sr_ratios=config.sr_ratios,
+                    hidden_sizes=config.hidden_sizes,
+                    patch_sizes=config.patch_sizes,
+                    strides=config.strides,
+                    num_attention_heads=config.num_attention_heads,
+                    mlp_ratios=config.mlp_ratios,
+                    hidden_act=config.hidden_act,
+                    hidden_dropout_prob=config.hidden_dropout_prob,
+                    attention_probs_dropout_prob=config.attention_probs_dropout_prob,
+                    initializer_range=config.initializer_range,
+                    drop_path_rate=config.drop_path_rate,
+                    layer_norm_eps=config.layer_norm_eps,
+                    decoder_hidden_size=64,
+                    max_depth=10,
+                    head_in_index=-1,
+                )
+                config.depth_config.silog_lambda = 0.25
+
+            config.depth_config.silog_lambda = kwargs.get("silog_lambda", config.depth_config.silog_lambda)
+            depth_ignore_semantic_classes = kwargs.get("depth_ignore_semantic_classes", ["sky"])
+            depth_ignore_semantic_ids = [config.label2id[label] for label in depth_ignore_semantic_classes]
+            if config.do_reduce_labels:
+                depth_ignore_semantic_ids = list(map(lambda x: x - 1 if x != 0 else 255, depth_ignore_semantic_ids))
+            config.depth_config.ignore_semantic_ids = depth_ignore_semantic_ids
 
         super().__init__(config)
 
@@ -157,7 +167,11 @@ class MultitaskSegformer(SegformerForSemanticSegmentation):
                 raise ValueError(f"Number of labels should be >=0: {self.config.num_labels}")
 
             if self.train_depth:
-                loss_fct = SiLogLoss()
+                loss_fct = SiLogLoss(lambd=self.config.depth_config.silog_lambda)
+                # We filter out sky pixels in the loss function by setting them to zero
+                ignore_ids = torch.tensor(self.config.depth_config.ignore_semantic_ids).to(labels.device)
+                depth_labels[torch.isin(labels, ignore_ids)] = 0
+                # Labels are converted to log by loss function, model inference is in log depth
                 loss = loss + loss_fct(predicted_depth, depth_labels)
 
         if not return_dict:
