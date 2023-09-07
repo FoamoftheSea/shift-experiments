@@ -19,8 +19,8 @@ from transformers.utils import logging
 from shift_lab.semantic_segmentation.shift_labels import id2label
 from shift_lab.semantic_segmentation.segformer.metrics import SegformerEvalMetrics
 from shift_lab.semantic_segmentation.segformer.trainer import (
-    SHIFTSegformerTrainer,
-    SHIFTSegformerForSemanticSegmentation,
+    MultitaskSegformerTrainer,
+    MultitaskSegformer,
 )
 
 logger = logging.get_logger(__name__)
@@ -100,7 +100,7 @@ def main(args):
     
             return segformer_metrics.compute() if calculate_result else None
 
-    model = SHIFTSegformerForSemanticSegmentation.from_pretrained(
+    model = MultitaskSegformer.from_pretrained(
         args.checkpoint if args.checkpoint is not None else PRETRAINED_MODEL_NAME,
         id2label=id2label,
         label2id=label2id,
@@ -174,7 +174,7 @@ def main(args):
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.eval_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
-        save_total_limit=3,
+        save_total_limit=args.save_total_limit,
         evaluation_strategy="steps",
         save_strategy="steps",
         save_steps=args.save_steps,
@@ -206,7 +206,7 @@ def main(args):
     #     warmup_ratio=0.05,
     # )
 
-    trainer = SHIFTSegformerTrainer(
+    trainer = MultitaskSegformerTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -241,6 +241,7 @@ if __name__ == "__main__":
     parser.add_argument("-eval", "--eval-only", action="store_true", default=False, help="Only run evaluation step.")
     parser.add_argument("-semseg", "--semseg", action="store_true", default=True, help="Train semesg head.")
     parser.add_argument("-depth", "--depth", action="store_true", default=False, help="Train depth head.")
+    parser.add_argument("-stl", "--save-total-limit", type=int, default=None, help="Maximum number of checkpoints to store at once.")
 
     args = parser.parse_args()
     if args.eval_batch_size is None:

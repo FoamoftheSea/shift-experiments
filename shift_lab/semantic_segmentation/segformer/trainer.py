@@ -65,37 +65,42 @@ class SHIFTSemanticSegmenterOutput(SemanticSegmenterOutput):
     depth_pred: Optional[torch.FloatTensor] = None
 
 
-class SHIFTSegformerForSemanticSegmentation(SegformerForSemanticSegmentation):
+class MultitaskSegformer(SegformerForSemanticSegmentation):
 
     def __init__(self, config, **kwargs):
-        super().__init__(config)
         self.class_loss_weights = None
         if "train_depth" in kwargs and kwargs["train_depth"]:
             self.train_depth = True
-            self.depth_config = GLPNConfig(
-                num_channels=self.config.num_channels,
-                num_encoder_blocks=self.config.num_encoder_blocks,
-                depths=self.config.depths,
-                sr_ratios=self.config.sr_ratios,
-                hidden_sizes=self.config.hidden_sizes,
-                patch_sizes=self.config.patch_sizes,
-                strides=self.config.strides,
-                num_attention_heads=self.config.num_attention_heads,
-                mlp_ratios=self.config.mlp_ratios,
-                hidden_act=self.config.hidden_act,
-                hidden_dropout_prob=self.config.hidden_dropout_prob,
-                attention_probs_dropout_prob=self.config.attention_probs_dropout_prob,
-                initializer_range=self.config.initializer_range,
-                drop_path_rate=self.config.drop_path_rate,
-                layer_norm_eps=self.config.layer_norm_eps,
+        else:
+            self.train_depth = False
+
+        if self.train_depth and (not hasattr(config, "depth_config") or config.depth_config is None):
+            config.depth_config = GLPNConfig(
+                num_channels=config.num_channels,
+                num_encoder_blocks=config.num_encoder_blocks,
+                depths=config.depths,
+                sr_ratios=config.sr_ratios,
+                hidden_sizes=config.hidden_sizes,
+                patch_sizes=config.patch_sizes,
+                strides=config.strides,
+                num_attention_heads=config.num_attention_heads,
+                mlp_ratios=config.mlp_ratios,
+                hidden_act=config.hidden_act,
+                hidden_dropout_prob=config.hidden_dropout_prob,
+                attention_probs_dropout_prob=config.attention_probs_dropout_prob,
+                initializer_range=config.initializer_range,
+                drop_path_rate=config.drop_path_rate,
+                layer_norm_eps=config.layer_norm_eps,
                 decoder_hidden_size=64,
                 max_depth=10,
                 head_in_index=-1,
             )
-            self.depth_decoder = GLPNDecoder(self.depth_config)
-            self.depth_head = GLPNDepthEstimationHead(self.depth_config)
-        else:
-            self.train_depth = False
+
+        super().__init__(config)
+
+        if config.depth_config is not None:
+            self.depth_decoder = GLPNDecoder(config.depth_config)
+            self.depth_head = GLPNDepthEstimationHead(config.depth_config)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -171,7 +176,7 @@ class SHIFTSegformerForSemanticSegmentation(SegformerForSemanticSegmentation):
         )
 
 
-class SHIFTSegformerTrainer(Trainer):
+class MultitaskSegformerTrainer(Trainer):
 
     def __init__(
         self,
