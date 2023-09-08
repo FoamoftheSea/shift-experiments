@@ -107,7 +107,6 @@ def main(args):
         ignore_mismatched_sizes=True,
         train_depth=args.depth,
         do_reduce_labels=DO_REDUCE_LABELS,
-        depth_ignore_semantic_classes=["sky"]
     )
     # Set loss weights to the device where loss is calculated
     loss_weights_tensor = torch.tensor(CLASS_LOSS_WEIGHTS)
@@ -155,6 +154,7 @@ def main(args):
         frame_transforms=FRAME_TRANSFORMS,
         image_processor=image_processor_train,
         load_full_res=TRAIN_FULL_RES,
+        depth_mask_semantic_ids=[label2id["sky"]],
     )
 
     val_dataset = SHIFTDataset(
@@ -167,6 +167,7 @@ def main(args):
         verbose=True,
         image_processor=image_processor_val,
         load_full_res=EVAL_FULL_RES,
+        depth_mask_semantic_ids=[label2id["sky"]],
     )
 
     training_args = TrainingArguments(

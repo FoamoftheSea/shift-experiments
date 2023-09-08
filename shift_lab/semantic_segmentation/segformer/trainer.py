@@ -73,6 +73,10 @@ class MultitaskSegformer(SegformerForSemanticSegmentation):
         self.class_loss_weights = None
         if not hasattr(config, "do_reduce_labels"):
             config.do_reduce_labels = True if do_reduce_labels is None else do_reduce_labels
+        else:
+            if do_reduce_labels is not None and do_reduce_labels != config.do_reduce_labels:
+                logger.warning("'do_reduce_labels' setting passed but conflicts with the setting in pretrained model.")
+                logger.warning("Defaulting to setting in pretrained config to avoid class ID conflict.")
         self.train_depth = train_depth
 
         if self.train_depth:
@@ -100,11 +104,6 @@ class MultitaskSegformer(SegformerForSemanticSegmentation):
                 config.depth_config.silog_lambda = 0.25
 
             config.depth_config.silog_lambda = kwargs.get("silog_lambda", config.depth_config.silog_lambda)
-            depth_ignore_semantic_classes = kwargs.get("depth_ignore_semantic_classes", ["sky"])
-            depth_ignore_semantic_ids = [config.label2id[label] for label in depth_ignore_semantic_classes]
-            if config.do_reduce_labels:
-                depth_ignore_semantic_ids = list(map(lambda x: x - 1 if x != 0 else 255, depth_ignore_semantic_ids))
-            config.depth_config.ignore_semantic_ids = depth_ignore_semantic_ids
 
         super().__init__(config)
 
@@ -168,9 +167,6 @@ class MultitaskSegformer(SegformerForSemanticSegmentation):
 
             if self.train_depth:
                 loss_fct = SiLogLoss(lambd=self.config.depth_config.silog_lambda)
-                # We filter out sky pixels in the loss function by setting them to zero
-                ignore_ids = torch.tensor(self.config.depth_config.ignore_semantic_ids).to(labels.device)
-                depth_labels[torch.isin(labels, ignore_ids)] = 0
                 # Labels are converted to log by loss function, model inference is in log depth
                 loss = loss + loss_fct(predicted_depth, depth_labels)
 

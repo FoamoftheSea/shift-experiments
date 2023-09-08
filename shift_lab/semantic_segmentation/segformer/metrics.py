@@ -126,7 +126,7 @@ class SegformerSemanticSegEvalMetric:
 
 
 class SegformerDepthEvalMetric:
-    def __init__(self, silog_lambda=0.5, log_predictions=True, log_labels=False):
+    def __init__(self, silog_lambda=0.5, log_predictions=True, log_labels=False, mask_value=0.0):
         self.batch_mae = []
         self.batch_mse = []
         self.batch_rmse = []
@@ -136,10 +136,12 @@ class SegformerDepthEvalMetric:
         self.silog_loss = SiLogLoss(lambd=silog_lambda, log_predictions=log_predictions, log_labels=log_labels)
         self.log_predictions = log_predictions
         self.log_labels = log_labels
+        self.mask_value = mask_value
 
     def update(self, prediction, label):
-        y = np.exp(label) if self.log_labels else label
-        y_hat = np.exp(prediction) if self.log_predictions else prediction
+        valid_pixels = np.where(label != self.mask_value)
+        y = np.exp(label[valid_pixels]) if self.log_labels else label[valid_pixels]
+        y_hat = np.exp(prediction[valid_pixels]) if self.log_predictions else prediction[valid_pixels]
         self.batch_mae.append(np.mean(np.abs(y - y_hat)))
         batch_mse = np.mean(np.power(y - y_hat, 2))
         self.batch_mse.append(batch_mse)
