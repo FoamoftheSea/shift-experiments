@@ -16,13 +16,21 @@ Navigate in your terminal into this repository. With [Docker](https://www.docker
 ### Local
 
 If you'd prefer to work outside the Docker container, you can set up like this:
-1. Set up a virtual environment:
+1. Install latest [NVIDIA driver](https://www.nvidia.com/download/index.aspx) for your hardware.
+2. Install [CUDA Toolkit](https://docs.nvidia.com/cuda/cuda-installation-guide-microsoft-windows/index.html).
+3. Set up a virtual environment:
    - `python -m venv ./venv`
-2. Activate virtual environment:
+4. Activate virtual environment:
    - Windows Powershell: `./venv/Scripts/Activate.ps1`
    - Linux: `source ./venv/bin/activate`
-3. Install repo:
+5. Install repo:
    - If on linux: `export PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu117`
    - `pip install -e .`
-4. Run a training script (Use --help to discover params):
+6. Install bitsandbytes:
+   - git clone https://github.com/TimDettmers/bitsandbytes.git
+   - cd bitsandbytes
+   - CUDA_VERSION=117 make cuda11x
+   - python setup.py install
+   - cd ..
+7. Run a training script (Use --help to discover params):
    - `python shift-experiments/shift_lab/semantic_segmentation/segformer/train_segformer.py --help`
