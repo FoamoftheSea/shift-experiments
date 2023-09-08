@@ -14,7 +14,6 @@ setup(
         "wandb==0.15.8",
         "transformers[torch]==4.32.0",
         "evaluate==0.4.0",
-        "bitsandbytes @ git+https://github.com/TimDettmers/bitsandbytes.git@main",
         "shift_dev @ git+https://github.com/FoamoftheSea/shift-dev.git@segformer-mods",
     ],
 )
