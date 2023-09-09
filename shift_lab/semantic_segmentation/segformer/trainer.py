@@ -101,9 +101,14 @@ class MultitaskSegformer(SegformerForSemanticSegmentation):
                     max_depth=10,
                     head_in_index=-1,
                 )
-                config.depth_config.silog_lambda = 0.25
 
-            config.depth_config.silog_lambda = kwargs.get("silog_lambda", config.depth_config.silog_lambda)
+            else:
+                config.depth_config = GLPNConfig(**config.depth_config)
+
+            config.depth_config.silog_lambda = kwargs.get(
+                "silog_lambda",
+                config.depth_config.__dict__.get("silog_lambda", 0.25)
+            )
 
         super().__init__(config)
 
