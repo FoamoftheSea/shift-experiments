@@ -1,9 +1,7 @@
 import numpy as np
 import torch
 from collections import Counter
-from typing import Set, Optional, List
-
-from shift_lab.semantic_segmentation.shift_labels import id2label
+from typing import Set, Optional, List, Dict
 
 
 class SiLogLoss(torch.nn.Module):
@@ -55,16 +53,19 @@ class SegformerEvalMetrics:
     def __init__(
         self,
         tasks: List[str],
-        semseg_ignore_class_ids: Optional[Set[int]] = None,
-        semseg_reduced_labels: bool = False,
+        id2label: Optional[Dict[int, str]] = None,
+        ignore_class_ids: Optional[Set[int]] = None,
+        reduced_labels: bool = False,
     ):
         assert all(task in ["semseg", "depth"] for task in tasks), "Unrecognized task passed to metrics."
         self.tasks = tasks
         self.metrics = {}
         if "semseg" in tasks:
+            assert id2label is not None, "Must pass id2label dict to SegformerEvalMetrics when training semseg."
             self.metrics["semseg"] = SegformerSemanticSegEvalMetric(
-                ignore_class_ids=semseg_ignore_class_ids,
-                reduced_labels=semseg_reduced_labels
+                id2label=id2label,
+                ignore_class_ids=ignore_class_ids,
+                reduced_labels=reduced_labels
             )
         if "depth" in tasks:
             self.metrics["depth"] = SegformerDepthEvalMetric()
@@ -77,12 +78,18 @@ class SegformerEvalMetrics:
 
 
 class SegformerSemanticSegEvalMetric:
-    def __init__(self, ignore_class_ids: Optional[Set[int]] = None, reduced_labels: bool = False):
+    def __init__(
+            self,
+            id2label: Dict[int, str],
+            ignore_class_ids: Optional[Set[int]] = None,
+            reduced_labels: bool = False
+    ):
         self.total_area_intersect = Counter()
         self.total_area_union = Counter()
         self.total_label_area = Counter()
         self.ignore_class_ids = ignore_class_ids or set()
         self.reduced_labels = reduced_labels
+        self.id2label = id2label
 
     def update(self, logits: np.ndarray, gt_labels: np.ndarray):
 
@@ -97,7 +104,7 @@ class SegformerSemanticSegEvalMetric:
 
         pred_labels = logits_tensor.detach().cpu().numpy()
 
-        for class_id in id2label.keys():
+        for class_id in self.id2label.keys():
             if class_id in self.ignore_class_ids:
                 continue
             if self.reduced_labels:
@@ -106,7 +113,7 @@ class SegformerSemanticSegEvalMetric:
                 label_id = class_id
             pred_pixels = pred_labels == label_id
             gt_pixels = gt_labels == label_id
-            class_label = id2label[class_id]
+            class_label = self.id2label[class_id]
             self.total_area_intersect.update({class_label: np.sum(np.bitwise_and(pred_pixels, gt_pixels))})
             self.total_area_union.update({class_label: np.sum(np.bitwise_or(pred_pixels, gt_pixels))})
             self.total_label_area.update({class_label: np.sum(gt_pixels)})

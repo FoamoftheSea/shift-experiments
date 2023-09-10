@@ -112,7 +112,7 @@ class MultitaskSegformer(SegformerForSemanticSegmentation):
 
         super().__init__(config)
 
-        if config.depth_config is not None:
+        if hasattr(config, "depth_config") and config.depth_config is not None:
             self.depth_decoder = GLPNDecoder(config.depth_config)
             self.depth_head = GLPNDepthEstimationHead(config.depth_config)
 

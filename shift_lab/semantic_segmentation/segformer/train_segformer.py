@@ -16,7 +16,7 @@ from transformers import (
 from transformers.training_args import OptimizerNames
 from transformers.utils import logging
 
-from shift_lab.semantic_segmentation.shift_labels import id2label
+from shift_lab.semantic_segmentation.shift_labels import id2label as shift_id2label, shift2cityscapes
 from shift_lab.semantic_segmentation.segformer.metrics import SegformerEvalMetrics
 from shift_lab.semantic_segmentation.segformer.trainer import (
     MultitaskSegformerTrainer,
@@ -28,52 +28,75 @@ logger.setLevel(logging.DEBUG)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-# Omitting these classes from eval in accordance with Cityscapes
-EVAL_IGNORE_IDS = {k for k, v in id2label.items() if v.ignoreInEval}
-id2label = {k: v.name for k, v in id2label.items()}
+TRAIN_DATASET = "shift"
+TRAIN_ONTOLOGY = "cityscapes"
+
+if TRAIN_ONTOLOGY == "shift":
+    # Omitting these classes from eval in accordance with Cityscapes
+    DO_REDUCE_LABELS = True
+    EVAL_IGNORE_IDS = {k for k, v in shift_id2label.items() if v.ignoreInEval}
+    id2label = {k: v.name for k, v in shift_id2label.items()}
+    CLASS_ID_REMAP = None
+    CLASS_LOSS_WEIGHTS = {
+        "building": 0.04222825955577863,
+        "pedestrian": 0.047445990516605495,
+        "pole": 0.04716318294296953,
+        "road line": 0.04701319399433329,
+        "road": 0.03254657779903941,
+        "sidewalk": 0.045215864574844555,
+        "vegetation": 0.04268060265261902,
+        "vehicle": 0.04524841096107193,
+        "wall": 0.04683261072198212,
+        "traffic sign": 0.047584108152864686,
+        "sky": 0.03540394188413042,
+        "traffic light": 0.0475655153334132,
+        "static": 0.04745211954958151,
+        "dynamic": 0.04756501593671283,
+        "terrain": 0.045982952375233296,
+        "other": 0.04748171409451219,
+        "ground": 0.0474869899781356,
+        "fence": 0.04731463233410513,
+        "guard rail": 0.047304633054814596,
+        "rail track": 0.047465059495701845,
+        "water": 0.04760968530230659,
+        "bridge": 0.04740893878924414,
+        "unlabeled": 0.0,
+    }
+    CLASS_LOSS_WEIGHTS = [CLASS_LOSS_WEIGHTS[id2label[cid]] for cid in sorted(id2label.keys())]
+elif TRAIN_ONTOLOGY == "cityscapes":
+    from shift_lab.semantic_segmentation.labels import id2label
+    DO_REDUCE_LABELS = False
+    EVAL_IGNORE_IDS = {v.trainId for k, v in id2label.items() if v.ignoreInEval}
+    CLASS_LOSS_WEIGHTS = None
+
+    if TRAIN_DATASET == "shift":
+        CLASS_ID_REMAP = {k: id2label[v.cityscapesId].trainId for k, v in shift_id2label.items()}
+    else:
+        CLASS_ID_REMAP = None
+
+    id2label = {v.trainId: v.name for k, v in id2label.items() if v.trainId != 255}
+    id2label[255] = "unlabeled"
+
+else:
+    raise ValueError("TRAIN_ONTOLOGY must be 'shift' or 'cityscapes'")
+
 label2id = {v: k for k, v in id2label.items()}
+
+if DO_REDUCE_LABELS and 0 in id2label.keys():
+    CLASS_LOSS_WEIGHTS.append(CLASS_LOSS_WEIGHTS.pop(0))
 
 # PRETRAINED_MODEL_NAME = "nvidia/segformer-b0-finetuned-cityscapes-512-1024"
 # PRETRAINED_MODEL_NAME = "nvidia/segformer-b0-finetuned-cityscapes-768-768"
-PRETRAINED_MODEL_NAME = "nvidia/segformer-b0-finetuned-cityscapes-640-1280"
+# PRETRAINED_MODEL_NAME = "nvidia/segformer-b0-finetuned-cityscapes-640-1280"
+PRETRAINED_MODEL_NAME = "nvidia/mit-b0"
 IMAGE_TRANSFORMS = [
     v2.ColorJitter(brightness=0.25, contrast=0.25, saturation=0.25, hue=0.1),
 ]
 FRAME_TRANSFORMS = []
 TRAIN_FULL_RES = True
 EVAL_FULL_RES = True
-DO_REDUCE_LABELS = True
 # Size of image passed to train/val if not FULL_RES
 TRAIN_IMAGE_SIZE = {"height": 800, "width": 1280}
-
-CLASS_LOSS_WEIGHTS = {
-    'building': 0.04222825955577863,
-    'pedestrian': 0.047445990516605495,
-    'pole': 0.04716318294296953,
-    'road line': 0.04701319399433329,
-    'road': 0.03254657779903941,
-    'sidewalk': 0.045215864574844555,
-    'vegetation': 0.04268060265261902,
-    'vehicle': 0.04524841096107193,
-    'wall': 0.04683261072198212,
-    'traffic sign': 0.047584108152864686,
-    'sky': 0.03540394188413042,
-    'traffic light': 0.0475655153334132,
-    'static': 0.04745211954958151,
-    'dynamic': 0.04756501593671283,
-    'terrain': 0.045982952375233296,
-    'other': 0.04748171409451219,
-    'ground': 0.0474869899781356,
-    'fence': 0.04731463233410513,
-    'guard rail': 0.047304633054814596,
-    'rail track': 0.047465059495701845,
-    'water': 0.04760968530230659,
-    'bridge': 0.04740893878924414,
-    'unlabeled': 0.0,
-}
-CLASS_LOSS_WEIGHTS = [CLASS_LOSS_WEIGHTS[id2label[cid]] for cid in sorted(id2label.keys())]
-if DO_REDUCE_LABELS and 0 in id2label.keys():
-    CLASS_LOSS_WEIGHTS.append(CLASS_LOSS_WEIGHTS.pop(0))
 
 
 def main(args):
@@ -84,7 +107,7 @@ def main(args):
     if args.depth:
         tasks.append("depth")
     segformer_metrics = SegformerEvalMetrics(
-        tasks=tasks, semseg_ignore_class_ids=EVAL_IGNORE_IDS, semseg_reduced_labels=DO_REDUCE_LABELS
+        id2label=id2label, tasks=tasks, ignore_class_ids=EVAL_IGNORE_IDS, reduced_labels=DO_REDUCE_LABELS
     )
 
     def compute_metrics(eval_pred, calculate_result=True) -> Optional[dict]:
@@ -109,15 +132,15 @@ def main(args):
         do_reduce_labels=DO_REDUCE_LABELS,
     )
     # Set loss weights to the device where loss is calculated
-    loss_weights_tensor = torch.tensor(CLASS_LOSS_WEIGHTS)
-    model.class_loss_weights = loss_weights_tensor.to(device)
+    if CLASS_LOSS_WEIGHTS is not None:
+        model.class_loss_weights = torch.tensor(CLASS_LOSS_WEIGHTS).to(device)
 
     image_processor_train = SegformerMultitaskImageProcessor.from_pretrained(
-        PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS
+        PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS, class_id_remap=CLASS_ID_REMAP,
     )
     image_processor_train.size = TRAIN_IMAGE_SIZE
     image_processor_val = SegformerMultitaskImageProcessor.from_pretrained(
-        PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS
+        PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS, class_id_remap=CLASS_ID_REMAP,
     )
     image_processor_val.size = TRAIN_IMAGE_SIZE
 
