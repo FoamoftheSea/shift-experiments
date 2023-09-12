@@ -33,6 +33,8 @@ def main(args):
             continue
         # Get the run history and files
         history = run.history(samples=run.lastHistoryStep + 1)
+        system = run.history(samples=run.lastHistoryStep + 1, stream="system")
+        history = history.join(system, rsuffix="_system")
         files = run.files()
 
         name = run.name if args.names is None else args.names[args.runs.index(run.id)]
@@ -48,7 +50,7 @@ def main(args):
             resume="allow"
         )
         for index, row in history.iterrows():
-            new_run.log({k: v for k, v in row.to_dict().items() if not np.isnan(v)})
+            new_run.log({k: v for k, v in row.to_dict().items() if v is None or not (v == "NaN" or np.isnan(v))})
 
         # Upload the files to the new run
         for file in files:
