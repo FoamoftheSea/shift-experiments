@@ -23,7 +23,7 @@ class SiLogLoss(torch.nn.Module):
         valid_mask = (target > 0).detach()
         y = target[valid_mask] if self.log_labels else torch.log(target[valid_mask])
         y_hat = pred[valid_mask] if self.log_predictions else torch.log(pred[valid_mask])
-        diff = y - y_hat
+        diff = y_hat - y
         loss = torch.pow(diff, 2).mean() - self.lambd * torch.pow(diff.mean(), 2)
 
         return loss

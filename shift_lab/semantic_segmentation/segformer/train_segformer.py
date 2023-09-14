@@ -160,10 +160,13 @@ def main(args):
         # Keys.masks,                 # instance masks, shape (num_ins, H, W), binary
         # Keys.depth_maps,  # depth maps, shape (1, H, W), float (meters)
     ]
+    training_tasks = set()
     if args.semseg:
         keys_to_load.append(Keys.segmentation_masks)
+        training_tasks.add("semseg")
     if args.depth:
         keys_to_load.append(Keys.depth_maps)
+        training_tasks.add("depth")
 
     train_dataset = SHIFTDataset(
         data_root=args.data_root,
@@ -238,6 +241,7 @@ def main(args):
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         compute_metrics=compute_metrics,
+        training_tasks=training_tasks,
     )
     if args.eval_only:
         trainer.evaluate()
@@ -265,7 +269,7 @@ if __name__ == "__main__":
     parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Path to checpoint to resume training.")
     parser.add_argument("-rwb", "--resume-wandb", type=str, default=None, help="ID of run to resume")
     parser.add_argument("-eval", "--eval-only", action="store_true", default=False, help="Only run evaluation step.")
-    parser.add_argument("-semseg", "--semseg", action="store_true", default=True, help="Train semesg head.")
+    parser.add_argument("-semseg", "--semseg", action="store_true", default=False, help="Train semesg head.")
     parser.add_argument("-depth", "--depth", action="store_true", default=False, help="Train depth head.")
     parser.add_argument("-stl", "--save-total-limit", type=int, default=None, help="Maximum number of checkpoints to store at once.")
 
