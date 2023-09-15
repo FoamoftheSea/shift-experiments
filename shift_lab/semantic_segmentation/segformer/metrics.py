@@ -13,11 +13,12 @@ class SiLogLoss(torch.nn.Module):
 
     """
 
-    def __init__(self, lambd=0.5, log_predictions=True, log_labels=False):
+    def __init__(self, lambd=0.5, log_predictions=True, log_labels=False, sqrt_output=False):
         super().__init__()
         self.lambd = lambd
         self.log_predictions = log_predictions
         self.log_labels = log_labels
+        self.sqrt_output = sqrt_output
 
     def forward(self, pred, target):
         valid_mask = (target > 0).detach()
@@ -26,7 +27,7 @@ class SiLogLoss(torch.nn.Module):
         diff = y_hat - y
         loss = torch.pow(diff, 2).mean() - self.lambd * torch.pow(diff.mean(), 2)
 
-        return loss
+        return loss if not self.sqrt_output else torch.sqrt(loss)
 
 
 class IRMSELoss(torch.nn.Module):
