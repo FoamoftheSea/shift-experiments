@@ -54,6 +54,7 @@ from transformers.trainer_utils import (
 from transformers.training_args import ParallelMode
 from transformers.utils import is_torch_tpu_available, logging, is_sagemaker_mp_enabled, is_peft_available, is_accelerate_available
 
+from shift_lab.semantic_segmentation.segformer.constants import SegformerTask
 from shift_lab.semantic_segmentation.segformer.metrics import SiLogLoss
 
 logger = logging.get_logger(__name__)
@@ -100,7 +101,13 @@ class SHIFTSemanticSegmenterOutput(SemanticSegmenterOutput):
 
 class MultitaskSegformer(SegformerForSemanticSegmentation):
 
-    def __init__(self, config, do_reduce_labels: Optional[bool] = None, train_depth=False, **kwargs):
+    def __init__(
+        self,
+        config,
+        do_reduce_labels: Optional[bool] = None,
+        tasks: Optional[List[SegformerTask]] = None,
+        **kwargs
+    ):
         self.class_loss_weights = None
         if not hasattr(config, "do_reduce_labels"):
             config.do_reduce_labels = True if do_reduce_labels is None else do_reduce_labels
@@ -108,9 +115,9 @@ class MultitaskSegformer(SegformerForSemanticSegmentation):
             if do_reduce_labels is not None and do_reduce_labels != config.do_reduce_labels:
                 logger.warning("'do_reduce_labels' setting passed but conflicts with the setting in pretrained model.")
                 logger.warning("Defaulting to setting in pretrained config to avoid class ID conflict.")
-        self.train_depth = train_depth
+        self.tasks = tasks if tasks is not None else [SegformerTask.SEMSEG, SegformerTask.DEPTH]
 
-        if self.train_depth:
+        if SegformerTask.DEPTH in self.tasks:
             if not hasattr(config, "depth_config") or config.depth_config is None:
                 config.depth_config = GLPNConfig(
                     num_channels=config.num_channels,

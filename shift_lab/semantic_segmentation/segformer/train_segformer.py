@@ -16,6 +16,7 @@ from transformers import (
 from transformers.training_args import OptimizerNames
 from transformers.utils import logging
 
+from shift_lab.semantic_segmentation.segformer.constants import SegformerTask
 from shift_lab.semantic_segmentation.shift_labels import id2label as shift_id2label, shift2cityscapes
 from shift_lab.semantic_segmentation.segformer.metrics import SegformerEvalMetrics
 from shift_lab.semantic_segmentation.segformer.trainer import (
@@ -103,9 +104,9 @@ def main(args):
 
     tasks = []
     if args.semseg:
-        tasks.append("semseg")
+        tasks.append(SegformerTask.SEMSEG)
     if args.depth:
-        tasks.append("depth")
+        tasks.append(SegformerTask.DEPTH)
     segformer_metrics = SegformerEvalMetrics(
         id2label=id2label, tasks=tasks, ignore_class_ids=EVAL_IGNORE_IDS, reduced_labels=DO_REDUCE_LABELS
     )
@@ -128,7 +129,7 @@ def main(args):
         id2label=id2label,
         label2id=label2id,
         ignore_mismatched_sizes=True,
-        train_depth=args.depth,
+        tasks=tasks,
         do_reduce_labels=DO_REDUCE_LABELS,
     )
     # Set loss weights to the device where loss is calculated
