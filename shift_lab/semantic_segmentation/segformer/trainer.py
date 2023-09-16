@@ -143,16 +143,15 @@ class MultitaskSegformer(SegformerForSemanticSegmentation):
             # else:
             #     config.depth_config = GLPNConfig(**config.depth_config)
 
-            config.depth_config.silog_lambda = kwargs.get(
-                "silog_lambda",
-                config.depth_config.__dict__.get("silog_lambda", 0.25)
-            )
-
         super().__init__(config)
 
         if hasattr(config, "depth_config") and config.depth_config is not None:
             if isinstance(config.depth_config, dict):
                 config.depth_config = GLPNConfig(**config.depth_config)
+            config.depth_config.silog_lambda = kwargs.get(
+                "silog_lambda",
+                config.depth_config.__dict__.get("silog_lambda", 0.25)
+            )
             self.depth_decoder = GLPNDecoder(config.depth_config)
             self.depth_head = GLPNDepthEstimationHead(config.depth_config)
 
@@ -212,7 +211,7 @@ class MultitaskSegformer(SegformerForSemanticSegmentation):
 
             loss["semseg"] = labels_loss
 
-        if SegformerTask.DEPTH in self.tasks:
+        if SegformerTask.DEPTH in self.tasks and depth_labels is not None:
             loss_fct = SiLogLoss(lambd=self.config.depth_config.silog_lambda)
             # Labels are converted to log by loss function, model inference is in log depth
             loss["depth"] = loss_fct(predicted_depth, depth_labels)

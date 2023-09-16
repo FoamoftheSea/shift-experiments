@@ -15,10 +15,11 @@ from shift_lab.semantic_segmentation.segformer.trainer import MultitaskSegformer
 
 def main(args):
     keys_to_load = [Keys.images]
-    if SegformerTask.SEMSEG in args.tasks:
-        keys_to_load.append(Keys.segmentation_masks)
-    if SegformerTask.DEPTH in args.tasks:
-        keys_to_load.append(Keys.depth_maps)
+    if args.load_gt:
+        if SegformerTask.SEMSEG in args.tasks:
+            keys_to_load.append(Keys.segmentation_masks)
+        if SegformerTask.DEPTH in args.tasks:
+            keys_to_load.append(Keys.depth_maps)
 
     views_to_load = args.views if not isinstance(args.views, str) else (args.views, )
 
@@ -62,37 +63,51 @@ def main(args):
                     prepared_frames = {k: np.concatenate((v, processed_frame[k]), axis=0) for k, v in prepared_frames.items()}
             prepared_frames = {k: torch.tensor(v).to(args.device) for k, v in prepared_frames.items()}
             outputs = model(**prepared_frames)
-            logits_tensor = torch.nn.functional.interpolate(
-                outputs.logits,
-                size=prepared_frames["labels"].shape[-2:],
-                mode="bilinear",
-                align_corners=False,
-            ).argmax(dim=1)
 
-            pred_labels = logits_tensor.detach().cpu().numpy()
+            view_path = Path(args.output) / args.scene_name / view
+            if hasattr(outputs, "logits"):
+                semseg_path = view_path / "semseg"
+                semseg_path.mkdir(exist_ok=True, parents=True)
+                logits_tensor = torch.nn.functional.interpolate(
+                    outputs.logits,
+                    size=prepared_frames["pixel_values"].shape[-2:],
+                    mode="bilinear",
+                    align_corners=False,
+                ).argmax(dim=1)
 
-            if model.config.do_reduce_labels:
-                pred_labels += 1
-                pred_labels[pred_labels == 256] = 0
+                pred_labels = logits_tensor.detach().cpu().numpy()
 
-            for i, pred_label in enumerate(pred_labels):
-                out_path = Path(args.output) / args.scene_name / view / f"{frame_ids[i]}_semseg_{view}.png"
-                out_path.parent.mkdir(exist_ok=True, parents=True)
-                cv2.imwrite(str(out_path), pred_label)
+                if model.config.do_reduce_labels:
+                    pred_labels += 1
+                    pred_labels[pred_labels == 256] = 0
+
+                for i, pred_label in enumerate(pred_labels):
+                    out_path = semseg_path / f"{frame_ids[i]}_semseg_{view}.png"
+                    out_path.parent.mkdir(exist_ok=True, parents=True)
+                    cv2.imwrite(str(out_path), pred_label)
+
+            if hasattr(outputs, "depth_pred"):
+                depth_path = view_path / "depth"
+                depth_path.mkdir(exist_ok=True, parents=True)
+                depth = np.exp(outputs.depth_pred.detach().cpu().numpy())
+                for i, depth_map in enumerate(depth):
+                    np.save(file=depth_path / f"{frame_ids[i]}_depth_{view}", arr=depth)
+
 
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Use model checkpoint to generate inference")
     parser.add_argument("-d", "--data-root", type=str, default="D:/shift_small", help="Path to SHIFT dataset.")
-    parser.add_argument("-s", "--split", type=str, default="train", help="Split to load for inference.")
+    parser.add_argument("-s", "--split", type=str, default="val", help="Split to load for inference.")
     parser.add_argument("-v", "--views", nargs="*", type=str, default="front", help="Views to load for inference.")
     parser.add_argument("-c", "--checkpoint", type=str, help="Path to the model checkpoint to load.")
     parser.add_argument("-t", "--tasks", nargs="*", type=str, help="Tasks to run inference on.")
     parser.add_argument("-o", "--output", type=str, default="./inference_out", help="Path for output.")
     parser.add_argument("-fr", "--framerate", type=str, default="images", help="Framerate to load.")
-    parser.add_argument("-sn", "--scene-name", type=str, default="00aa-d36e", help="Name of scene to load.")
+    parser.add_argument("-sn", "--scene-name", type=str, default="0aee-69fd", help="Name of scene to load.")
     parser.add_argument("-bs", "--batch-size", type=int, default=4, help="Number of frames to run at once.")
     parser.add_argument("--device", type=str, default="cuda:0", help="Pytorch device for computation.")
+    parser.add_argument("-gt", "--load-gt", action="store_true", help="Flag to load ground truth for loss calculation.")
 
     with torch.no_grad():
         main(parser.parse_args())
