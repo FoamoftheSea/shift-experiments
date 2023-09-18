@@ -54,6 +54,7 @@ from transformers.trainer_utils import (
 from transformers.training_args import ParallelMode
 from transformers.utils import is_torch_tpu_available, logging, is_sagemaker_mp_enabled, is_peft_available, is_accelerate_available
 
+from shift_lab.semantic_segmentation.segformer.constants import SegformerTask
 from shift_lab.semantic_segmentation.segformer.metrics import SiLogLoss
 
 logger = logging.get_logger(__name__)
@@ -100,7 +101,13 @@ class SHIFTSemanticSegmenterOutput(SemanticSegmenterOutput):
 
 class MultitaskSegformer(SegformerForSemanticSegmentation):
 
-    def __init__(self, config, do_reduce_labels: Optional[bool] = None, train_depth=False, **kwargs):
+    def __init__(
+        self,
+        config,
+        do_reduce_labels: Optional[bool] = None,
+        tasks: Optional[List[SegformerTask]] = None,
+        **kwargs
+    ):
         self.class_loss_weights = None
         if not hasattr(config, "do_reduce_labels"):
             config.do_reduce_labels = True if do_reduce_labels is None else do_reduce_labels
@@ -108,9 +115,9 @@ class MultitaskSegformer(SegformerForSemanticSegmentation):
             if do_reduce_labels is not None and do_reduce_labels != config.do_reduce_labels:
                 logger.warning("'do_reduce_labels' setting passed but conflicts with the setting in pretrained model.")
                 logger.warning("Defaulting to setting in pretrained config to avoid class ID conflict.")
-        self.train_depth = train_depth
+        self.tasks = tasks if tasks is not None else [SegformerTask.SEMSEG, SegformerTask.DEPTH]
 
-        if self.train_depth:
+        if SegformerTask.DEPTH in self.tasks:
             if not hasattr(config, "depth_config") or config.depth_config is None:
                 config.depth_config = GLPNConfig(
                     num_channels=config.num_channels,
@@ -133,17 +140,18 @@ class MultitaskSegformer(SegformerForSemanticSegmentation):
                     head_in_index=-1,
                 )
 
-            else:
-                config.depth_config = GLPNConfig(**config.depth_config)
-
-            config.depth_config.silog_lambda = kwargs.get(
-                "silog_lambda",
-                config.depth_config.__dict__.get("silog_lambda", 0.25)
-            )
+            # else:
+            #     config.depth_config = GLPNConfig(**config.depth_config)
 
         super().__init__(config)
 
         if hasattr(config, "depth_config") and config.depth_config is not None:
+            if isinstance(config.depth_config, dict):
+                config.depth_config = GLPNConfig(**config.depth_config)
+            config.depth_config.silog_lambda = kwargs.get(
+                "silog_lambda",
+                config.depth_config.__dict__.get("silog_lambda", 0.25)
+            )
             self.depth_decoder = GLPNDecoder(config.depth_config)
             self.depth_head = GLPNDepthEstimationHead(config.depth_config)
 
@@ -175,7 +183,7 @@ class MultitaskSegformer(SegformerForSemanticSegmentation):
         encoder_hidden_states = outputs.hidden_states if return_dict else outputs[1]
 
         logits = self.decode_head(encoder_hidden_states)
-        if self.train_depth:
+        if SegformerTask.DEPTH in self.tasks:
             depth_decoder_out = self.depth_decoder(encoder_hidden_states)
             predicted_depth = self.depth_head(depth_decoder_out)
         else:
@@ -203,7 +211,7 @@ class MultitaskSegformer(SegformerForSemanticSegmentation):
 
             loss["semseg"] = labels_loss
 
-        if self.train_depth:
+        if SegformerTask.DEPTH in self.tasks and depth_labels is not None:
             loss_fct = SiLogLoss(lambd=self.config.depth_config.silog_lambda)
             # Labels are converted to log by loss function, model inference is in log depth
             loss["depth"] = loss_fct(predicted_depth, depth_labels)
