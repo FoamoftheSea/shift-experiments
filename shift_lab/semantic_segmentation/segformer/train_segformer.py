@@ -30,7 +30,7 @@ logger.setLevel(logging.DEBUG)
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 TRAIN_DATASET = "shift"
-TRAIN_ONTOLOGY = "cityscapes"
+TRAIN_ONTOLOGY = "shift"
 
 if TRAIN_ONTOLOGY == "shift":
     # Omitting these classes from eval in accordance with Cityscapes
