@@ -150,8 +150,10 @@ class SegformerDepthEvalMetric:
         valid_pixels = np.where(label != self.mask_value)
         y = np.exp(label[valid_pixels]) if self.log_labels else label[valid_pixels]
         y_hat = np.exp(prediction[valid_pixels]) if self.log_predictions else prediction[valid_pixels]
-        self.batch_mae.append(np.mean(np.abs(y - y_hat)))
-        batch_mse = np.mean(np.power(y - y_hat, 2))
+        valid_mask = y > 0
+        diff = y[valid_mask] - y_hat[valid_mask]
+        self.batch_mae.append(np.mean(np.abs(diff)))
+        batch_mse = np.mean(np.power(diff, 2))
         self.batch_mse.append(batch_mse)
         self.batch_rmse.append(np.sqrt(batch_mse))
         self.batch_irmse.append(self.irmse_loss(torch.from_numpy(prediction), torch.from_numpy(label)))
