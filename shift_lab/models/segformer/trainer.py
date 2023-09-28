@@ -54,8 +54,8 @@ from transformers.trainer_utils import (
 from transformers.training_args import ParallelMode
 from transformers.utils import is_torch_tpu_available, logging, is_sagemaker_mp_enabled, is_peft_available, is_accelerate_available
 
-from shift_lab.semantic_segmentation.segformer.constants import SegformerTask
-from shift_lab.semantic_segmentation.segformer.metrics import DepthTrainLoss
+from shift_lab.models.segformer.constants import SegformerTask
+from shift_lab.models.segformer.metrics import DepthTrainLoss
 
 logger = logging.get_logger(__name__)
 

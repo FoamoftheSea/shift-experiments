@@ -10,16 +10,15 @@ from shift_dev.dataloader.image_processors import SegformerMultitaskImageProcess
 from shift_dev.utils.backend import FileBackend
 from torchvision.transforms import v2
 from transformers import (
-    SegformerImageProcessor,
     TrainingArguments,
 )
 from transformers.training_args import OptimizerNames
 from transformers.utils import logging
 
-from shift_lab.semantic_segmentation.segformer.constants import SegformerTask
-from shift_lab.semantic_segmentation.shift_labels import id2label as shift_id2label, shift2cityscapes
-from shift_lab.semantic_segmentation.segformer.metrics import SegformerEvalMetrics
-from shift_lab.semantic_segmentation.segformer.trainer import (
+from shift_lab.models.segformer.constants import SegformerTask
+from shift_lab.ontologies.semantic_segmentation.shift_labels import id2label as shift_id2label
+from shift_lab.models.segformer.metrics import SegformerEvalMetrics
+from shift_lab.models.segformer.trainer import (
     MultitaskSegformerTrainer,
     MultitaskSegformer,
 )
@@ -65,7 +64,7 @@ if TRAIN_ONTOLOGY == "shift":
     }
     CLASS_LOSS_WEIGHTS = [CLASS_LOSS_WEIGHTS[id2label[cid]] for cid in sorted(id2label.keys())]
 elif TRAIN_ONTOLOGY == "cityscapes":
-    from shift_lab.semantic_segmentation.labels import id2label
+    from shift_lab.ontologies.semantic_segmentation.cs_labels import id2label
     DO_REDUCE_LABELS = False
     EVAL_IGNORE_IDS = {v.trainId for k, v in id2label.items() if v.ignoreInEval}
     CLASS_LOSS_WEIGHTS = None
