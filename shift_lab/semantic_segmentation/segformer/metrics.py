@@ -49,6 +49,22 @@ class IRMSELoss(torch.nn.Module):
         return irmse
 
 
+class MAELoss(torch.nn.Module):
+    def __init__(self, log_predictions=True, log_labels=False):
+        super().__init__()
+        self.log_predictions = log_predictions
+        self.log_labels = log_labels
+
+    def forward(self, pred, target):
+        valid_mask = (target > 0).detach()
+        y = torch.exp(target[valid_mask]) if self.log_labels else target[valid_mask]
+        y_hat = torch.exp(pred[valid_mask]) if self.log_predictions else pred[valid_mask]
+        loss = torch.nn.L1Loss(reduction="mean")
+        mae = loss(y_hat, y)
+
+        return mae
+
+
 class SegformerEvalMetrics:
 
     def __init__(
@@ -167,3 +183,24 @@ class SegformerDepthEvalMetric:
             "irmse": np.mean(self.batch_irmse),
             "silog": np.mean(self.batch_silog),
         }
+
+
+class DepthTrainLoss(torch.nn.Module):
+
+    def __init__(self, losses={"silog": 1.0, "mae": 0.1}, log_predictions=True, log_labels=False, silog_lambda=0.5, sqrt_silog=False):
+        super().__init__()
+        self.losses = {k: {"weight": v} for k, v in losses.items()}
+        if "silog" in self.losses:
+            self.losses["silog"]["func"] = SiLogLoss(lambd=silog_lambda, sqrt_output=sqrt_silog, log_predictions=log_predictions, log_labels=log_labels)
+        if "mae" in self.losses:
+            self.losses["mae"]["func"] = MAELoss(log_predictions=log_predictions, log_labels=log_labels)
+
+    def forward(self, pred, target):
+        valid_mask = (target > 0).detach()
+        y = target[valid_mask]
+        y_hat = pred[valid_mask]
+        results = []
+        for loss in self.losses:
+            results = self.losses[loss]["func"](y_hat, y) * self.losses[loss]["weight"]
+
+        return torch.sum(results)
