@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple, Union, Any, Set
 
 import math
@@ -11,23 +10,18 @@ import torch
 import torch.distributed as dist
 from packaging import version
 from torch import nn
-from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss
 from torch.utils.data import DataLoader, Dataset
 from transformers import (
     TrainingArguments,
     Trainer,
     EvalPrediction,
     is_apex_available,
-    SegformerForSemanticSegmentation,
-    GLPNConfig,
 )
 from transformers.data.data_collator import DataCollator
 from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
 from transformers.deepspeed import deepspeed_init, deepspeed_load_checkpoint
 from transformers.integrations import hp_params
-from transformers.modeling_outputs import SemanticSegmenterOutput
 from transformers.modeling_utils import PreTrainedModel
-from transformers.models.glpn.modeling_glpn import GLPNDecoder, GLPNDepthEstimationHead
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer import TRAINER_STATE_NAME
 from transformers.trainer_callback import (
@@ -53,9 +47,6 @@ from transformers.trainer_utils import (
 )
 from transformers.training_args import ParallelMode
 from transformers.utils import is_torch_tpu_available, logging, is_sagemaker_mp_enabled, is_peft_available, is_accelerate_available
-
-from shift_lab.semantic_segmentation.segformer.constants import SegformerTask
-from shift_lab.semantic_segmentation.segformer.metrics import DepthTrainLoss
 
 logger = logging.get_logger(__name__)
 
@@ -91,148 +82,6 @@ if is_sagemaker_mp_enabled():
     from transformers.trainer_pt_utils import smp_forward_backward, smp_forward_only, smp_gather, smp_nested_concat
 else:
     IS_SAGEMAKER_MP_POST_1_10 = False
-
-
-@dataclass
-class SHIFTSemanticSegmenterOutput(SemanticSegmenterOutput):
-    loss: Optional[Dict[str, torch.FloatTensor]] = None
-    depth_pred: Optional[torch.FloatTensor] = None
-
-
-class MultitaskSegformer(SegformerForSemanticSegmentation):
-
-    def __init__(
-        self,
-        config,
-        do_reduce_labels: Optional[bool] = None,
-        tasks: Optional[List[SegformerTask]] = None,
-        **kwargs
-    ):
-        self.class_loss_weights = None
-        if not hasattr(config, "do_reduce_labels"):
-            config.do_reduce_labels = True if do_reduce_labels is None else do_reduce_labels
-        else:
-            if do_reduce_labels is not None and do_reduce_labels != config.do_reduce_labels:
-                logger.warning("'do_reduce_labels' setting passed but conflicts with the setting in pretrained model.")
-                logger.warning("Defaulting to setting in pretrained config to avoid class ID conflict.")
-        self.tasks = tasks if tasks is not None else [SegformerTask.SEMSEG, SegformerTask.DEPTH]
-
-        if SegformerTask.DEPTH in self.tasks:
-            if not hasattr(config, "depth_config") or config.depth_config is None:
-                config.depth_config = GLPNConfig(
-                    num_channels=config.num_channels,
-                    num_encoder_blocks=config.num_encoder_blocks,
-                    depths=config.depths,
-                    sr_ratios=config.sr_ratios,
-                    hidden_sizes=config.hidden_sizes,
-                    patch_sizes=config.patch_sizes,
-                    strides=config.strides,
-                    num_attention_heads=config.num_attention_heads,
-                    mlp_ratios=config.mlp_ratios,
-                    hidden_act=config.hidden_act,
-                    hidden_dropout_prob=config.hidden_dropout_prob,
-                    attention_probs_dropout_prob=config.attention_probs_dropout_prob,
-                    initializer_range=config.initializer_range,
-                    drop_path_rate=config.drop_path_rate,
-                    layer_norm_eps=config.layer_norm_eps,
-                    decoder_hidden_size=64,
-                    max_depth=10,
-                    head_in_index=-1,
-                )
-
-            # else:
-            #     config.depth_config = GLPNConfig(**config.depth_config)
-
-        super().__init__(config)
-
-        if hasattr(config, "depth_config") and config.depth_config is not None:
-            if isinstance(config.depth_config, dict):
-                config.depth_config = GLPNConfig(**config.depth_config)
-            config.depth_config.silog_lambda = kwargs.get(
-                "silog_lambda",
-                config.depth_config.__dict__.get("silog_lambda", 0.25)
-            )
-            self.depth_decoder = GLPNDecoder(config.depth_config)
-            self.depth_head = GLPNDepthEstimationHead(config.depth_config)
-
-        # Initialize weights and apply final processing
-        self.post_init()
-
-    def forward(
-        self,
-        pixel_values: torch.FloatTensor,
-        labels: Optional[torch.LongTensor] = None,
-        depth_labels: Optional = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, SemanticSegmenterOutput]:
-
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        )
-
-        outputs = self.segformer(
-            pixel_values,
-            output_attentions=output_attentions,
-            output_hidden_states=True,  # we need the intermediate hidden states
-            return_dict=return_dict,
-        )
-
-        encoder_hidden_states = outputs.hidden_states if return_dict else outputs[1]
-
-        logits = self.decode_head(encoder_hidden_states)
-        if SegformerTask.DEPTH in self.tasks:
-            depth_decoder_out = self.depth_decoder(encoder_hidden_states)
-            predicted_depth = self.depth_head(depth_decoder_out)
-        else:
-            predicted_depth = None
-
-        loss = {}
-        if labels is not None:
-            # upsample logits to the images' original size
-            upsampled_logits = nn.functional.interpolate(
-                logits, size=labels.shape[-2:], mode="bilinear", align_corners=False
-            )
-            if self.config.num_labels > 1:
-                loss_fct = CrossEntropyLoss(
-                    ignore_index=self.config.semantic_loss_ignore_index,
-                    weight=self.class_loss_weights
-                )
-                labels_loss = loss_fct(upsampled_logits, labels)
-            elif self.config.num_labels == 1:
-                valid_mask = ((labels >= 0) & (labels != self.config.semantic_loss_ignore_index)).float()
-                loss_fct = BCEWithLogitsLoss(reduction="none")
-                labels_loss = loss_fct(upsampled_logits.squeeze(1), labels.float())
-                labels_loss = (labels_loss * valid_mask).mean()
-            else:
-                raise ValueError(f"Number of labels should be >=0: {self.config.num_labels}")
-
-            loss["semseg"] = labels_loss
-
-        if SegformerTask.DEPTH in self.tasks and depth_labels is not None:
-            loss_fct = DepthTrainLoss(silog_lambda=self.config.depth_config.silog_lambda)
-            # Labels are converted to log by loss function, model inference is in log depth
-            loss["depth"] = loss_fct(predicted_depth, depth_labels)
-
-        if len(loss) == 0:
-            loss = None
-
-        if not return_dict:
-            if output_hidden_states:
-                output = (logits,) + outputs[1:]
-            else:
-                output = (logits,) + outputs[2:]
-            return ((loss,) + output) if loss is not None else output
-
-        return SHIFTSemanticSegmenterOutput(
-            loss=loss,
-            logits=logits,
-            depth_pred=predicted_depth,
-            hidden_states=outputs.hidden_states if output_hidden_states else None,
-            attentions=outputs.attentions,
-        )
 
 
 class MultitaskSegformerTrainer(Trainer):
@@ -1124,7 +973,7 @@ class MultitaskSegformerTrainer(Trainer):
         metrics = speed_metrics("train", start_time, num_samples=num_train_samples, num_steps=self.state.max_steps)
         self.store_flos()
         metrics["total_flos"] = self.state.total_flos
-        metrics["train_loss"] = train_loss.numpy()
+        metrics["train_loss"] = train_loss
 
         self.is_in_train = False
 
