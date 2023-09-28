@@ -55,7 +55,7 @@ from transformers.training_args import ParallelMode
 from transformers.utils import is_torch_tpu_available, logging, is_sagemaker_mp_enabled, is_peft_available, is_accelerate_available
 
 from shift_lab.semantic_segmentation.segformer.constants import SegformerTask
-from shift_lab.semantic_segmentation.segformer.metrics import SiLogLoss
+from shift_lab.semantic_segmentation.segformer.metrics import DepthTrainLoss
 
 logger = logging.get_logger(__name__)
 
@@ -212,7 +212,7 @@ class MultitaskSegformer(SegformerForSemanticSegmentation):
             loss["semseg"] = labels_loss
 
         if SegformerTask.DEPTH in self.tasks and depth_labels is not None:
-            loss_fct = SiLogLoss(lambd=self.config.depth_config.silog_lambda)
+            loss_fct = DepthTrainLoss(silog_lambda=self.config.depth_config.silog_lambda)
             # Labels are converted to log by loss function, model inference is in log depth
             loss["depth"] = loss_fct(predicted_depth, depth_labels)
 

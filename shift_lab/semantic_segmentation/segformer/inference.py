@@ -202,7 +202,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Use model checkpoint to generate inference")
-    parser.add_argument("-d", "--data-root", type=str, default="E:/shift_small", help="Path to SHIFT dataset.")
+    parser.add_argument("-d", "--data-root", type=str, default="E:/shift", help="Path to SHIFT dataset.")
     parser.add_argument("-s", "--split", type=str, default="val", help="Split to load for inference.")
     parser.add_argument("-v", "--views", nargs="*", type=str, default="front", help="Views to load for inference.")
     parser.add_argument("-c", "--checkpoint", type=str, help="Path to the model checkpoint to load.")
