@@ -18,7 +18,7 @@ Navigate in your terminal into this repository. With [Docker](https://www.docker
 2. Run Docker image:
    - `docker run -it --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 shift_lab:latest`
 3. Run a training script (Use --help to discover params):
-   - `python shift-experiments/shift_lab/semantic_segmentation/segformer/train_segformer.py --help`
+   - `python shift-experiments/shift_lab/models/segformer/train_segformer.py --help`
 
 ### Local
 
