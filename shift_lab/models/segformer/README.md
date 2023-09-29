@@ -1,6 +1,6 @@
 # Multitask Segformer
 
-https://github.com/FoamoftheSea/shift-experiments/assets/50897218/7e347a45-2b67-4dc7-a31b-be3669d49e64
+https://github.com/FoamoftheSea/shift-experiments/assets/50897218/0b43a121-a1e6-43ac-b80e-39842e2c225d
 
 Segformer ([Xie et al., 2021](https://arxiv.org/abs/2105.15203)) showed that a lightweight hierarchical transformer encoder could deliver multi-scale features to an all-MLP decoding head to deliver powerful semantic segmentation results. The next year, GLPN ([Kim et al., 2022](https://arxiv.org/abs/2201.07436)) showed that the same encoder could be paired with a lightweight decoding head to achieve competitive monocular depth estimation performance.
 
