@@ -40,4 +40,4 @@ If you'd prefer to work outside the Docker container, you can set up like this:
    - python setup.py install
    - cd ..
 7. Run a training script (Use --help to discover params):
-   - `python shift-experiments/shift_lab/models/segformer/train_segformer.py --help`
+   - `python shift_lab/models/segformer/train_segformer.py --help`
