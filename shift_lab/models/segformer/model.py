@@ -82,8 +82,8 @@ class MultitaskSegformer(SegformerForSemanticSegmentation):
     def forward(
         self,
         pixel_values: torch.FloatTensor,
-        labels: Optional[torch.LongTensor] = None,
-        depth_labels: Optional = None,
+        labels_semantic: Optional[torch.LongTensor] = None,
+        labels_depth: Optional = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
@@ -111,31 +111,31 @@ class MultitaskSegformer(SegformerForSemanticSegmentation):
             predicted_depth = None
 
         loss = {}
-        if labels is not None:
+        if labels_semantic is not None:
             # upsample logits to the images' original size
             upsampled_logits = torch.nn.functional.interpolate(
-                logits, size=labels.shape[-2:], mode="bilinear", align_corners=False
+                logits, size=labels_semantic.shape[-2:], mode="bilinear", align_corners=False
             )
             if self.config.num_labels > 1:
                 loss_fct = CrossEntropyLoss(
                     ignore_index=self.config.semantic_loss_ignore_index,
                     weight=self.class_loss_weights
                 )
-                labels_loss = loss_fct(upsampled_logits, labels)
+                labels_loss = loss_fct(upsampled_logits, labels_semantic)
             elif self.config.num_labels == 1:
-                valid_mask = ((labels >= 0) & (labels != self.config.semantic_loss_ignore_index)).float()
+                valid_mask = ((labels_semantic >= 0) & (labels_semantic != self.config.semantic_loss_ignore_index)).float()
                 loss_fct = BCEWithLogitsLoss(reduction="none")
-                labels_loss = loss_fct(upsampled_logits.squeeze(1), labels.float())
+                labels_loss = loss_fct(upsampled_logits.squeeze(1), labels_semantic.float())
                 labels_loss = (labels_loss * valid_mask).mean()
             else:
                 raise ValueError(f"Number of labels should be >=0: {self.config.num_labels}")
 
             loss["semseg"] = labels_loss
 
-        if SegformerTask.DEPTH in self.tasks and depth_labels is not None:
+        if SegformerTask.DEPTH in self.tasks and labels_depth is not None:
             loss_fct = DepthTrainLoss(silog_lambda=self.config.depth_config.silog_lambda)
             # Labels are converted to log by loss function, model inference is in log depth
-            loss["depth"] = loss_fct(predicted_depth, depth_labels)
+            loss["depth"] = loss_fct(predicted_depth, labels_depth)
 
         if len(loss) == 0:
             loss = None

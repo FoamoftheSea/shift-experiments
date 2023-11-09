@@ -120,7 +120,7 @@ def main(args):
 
     def compute_metrics(eval_pred, calculate_result=True) -> Optional[dict]:
         task_names = {"logits": "semseg", "depth_pred": "depth"}
-        label_names = {"logits": "labels", "depth_pred": "depth_labels"}
+        label_names = {"logits": "labels_semantic", "depth_pred": "labels_depth"}
 
         with torch.no_grad():
             predictions, labels = eval_pred

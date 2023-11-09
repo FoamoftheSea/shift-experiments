@@ -14,6 +14,6 @@ setup(
         "wandb==0.15.8",
         "transformers[torch]==4.32.0",
         "evaluate==0.4.0",
-        "shift_dev @ git+https://github.com/FoamoftheSea/shift-dev.git@segformer-mods",
+        "shift_dev @ git+https://github.com/FoamoftheSea/shift-dev.git@bbox-loading",
     ],
 )

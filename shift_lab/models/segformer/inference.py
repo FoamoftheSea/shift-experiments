@@ -11,7 +11,7 @@ from shift_dev.utils.backend import FileBackend
 from shift_dev.utils.load import im_decode
 
 from shift_lab.models.segformer.constants import SegformerTask
-from shift_lab.models.segformer.trainer import MultitaskSegformer
+from shift_lab.models.segformer.model import MultitaskSegformer
 
 
 class SHIFTInferenceCameraFrame:

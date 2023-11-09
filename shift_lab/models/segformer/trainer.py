@@ -88,7 +88,7 @@ class MultitaskSegformerTrainer(Trainer):
 
     def __init__(
         self,
-        training_tasks: Set[str],
+        training_tasks: Optional[Set[str]] = None,
         model: Union[PreTrainedModel, nn.Module] = None,
         args: TrainingArguments = None,
         data_collator: Optional[DataCollator] = None,
@@ -117,7 +117,11 @@ class MultitaskSegformerTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
         self.compute_metrics_interval = compute_metrics_interval
-        self.training_tasks = training_tasks
+        assert training_tasks is not None or loss_lambdas is not None, "Pass either training_tasks or loss_lambdas."
+        if training_tasks is None and loss_lambdas is not None:
+            self.training_tasks = list(loss_lambdas.keys())
+        else:
+            self.training_tasks = training_tasks
         if loss_lambdas is None:
             self.loss_lambdas = {task: torch.tensor(1.0).to(self.args.device) for task in self.training_tasks}
         else:
@@ -307,7 +311,8 @@ class MultitaskSegformerTrainer(Trainer):
                 if self.compute_metrics is not None and preds_host is not None and labels_host is not None:
                     if args.include_inputs_for_metrics:
                         metrics = self.compute_metrics(
-                            EvalPrediction(
+                            tasks=self.training_tasks,
+                            eval_pred=EvalPrediction(
                                 predictions=nested_numpify(preds_host),
                                 label_ids=nested_numpify(labels_host),
                                 inputs=nested_numpify(inputs_host),
@@ -316,7 +321,8 @@ class MultitaskSegformerTrainer(Trainer):
                         )
                     else:
                         metrics = self.compute_metrics(
-                            EvalPrediction(
+                            tasks=self.training_tasks,
+                            eval_pred=EvalPrediction(
                                 predictions=nested_numpify(preds_host),
                                 label_ids=nested_numpify(labels_host),
                             ),
