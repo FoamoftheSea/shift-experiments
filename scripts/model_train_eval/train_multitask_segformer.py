@@ -5,6 +5,7 @@ import wandb
 from argparse import ArgumentParser
 
 from shift_dev import SHIFTDataset
+from shift_dev.dataloader.shift_dataset import LoadForModel
 from shift_dev.types import Keys
 from shift_dev.dataloader.image_processors import MultitaskImageProcessor
 from shift_dev.utils.backend import FileBackend
@@ -104,6 +105,7 @@ def main(args):
     keys_to_load = [
         Keys.images,  # images, shape (1, 3, H, W), uint8 (RGB)
         Keys.intrinsics,  # camera intrinsics, shape (3, 3)
+        # Keys.boxes2d,
     ]
     if args.semseg:
         keys_to_load.append(Keys.segmentation_masks)
@@ -165,6 +167,7 @@ def main(args):
         image_processor=image_processor_train,
         load_full_res=TRAIN_FULL_RES,
         depth_mask_semantic_ids=[label2id["sky"]],
+        load_for_model=LoadForModel.MULTITASK_SEGFORMER,
     )
 
     val_dataset = SHIFTDataset(
@@ -178,6 +181,7 @@ def main(args):
         image_processor=image_processor_val,
         load_full_res=EVAL_FULL_RES,
         depth_mask_semantic_ids=[label2id["sky"]],
+        load_for_model=LoadForModel.MULTITASK_SEGFORMER,
     )
 
     training_args = TrainingArguments(
@@ -240,8 +244,8 @@ if __name__ == "__main__":
     parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Path to checpoint to resume training.")
     parser.add_argument("-rwb", "--resume-wandb", type=str, default=None, help="ID of run to resume")
     parser.add_argument("-eval", "--eval-only", action="store_true", default=False, help="Only run evaluation step.")
-    parser.add_argument("-semseg", "--semseg", action="store_true", default=False, help="Train semesg head.")
-    parser.add_argument("-depth", "--depth", action="store_true", default=False, help="Train depth head.")
+    parser.add_argument("-semseg", "--semseg", action="store_true", default=True, help="Train semesg head.")
+    parser.add_argument("-depth", "--depth", action="store_true", default=True, help="Train depth head.")
     parser.add_argument("-stl", "--save-total-limit", type=int, default=None, help="Maximum number of checkpoints to store at once.")
 
     args = parser.parse_args()

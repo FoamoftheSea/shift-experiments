@@ -31,8 +31,10 @@ If you'd prefer to work outside the Docker container, you can set up like this:
    - Windows Powershell: `./venv/Scripts/Activate.ps1`
    - Linux: `source ./venv/bin/activate`
 5. Install repo:
-   - If on linux: `export PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu117`
-   - `pip install -e .`
+   1. Set environment variable
+      - Linux: `export PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu117`
+      - Windows: `$env:PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu117"`
+   2. `pip install -e .`
 6. Install bitsandbytes:
    - git clone https://github.com/TimDettmers/bitsandbytes.git
    - cd bitsandbytes
