@@ -6,7 +6,7 @@ from argparse import ArgumentParser
 
 from shift_dev import SHIFTDataset
 from shift_dev.types import Keys
-from shift_dev.dataloader.image_processors import SegformerMultitaskImageProcessor
+from shift_dev.dataloader.image_processors import MultitaskImageProcessor
 from shift_dev.utils.backend import FileBackend
 from torchvision.transforms import v2
 from transformers import (
@@ -143,11 +143,11 @@ def main(args):
     if CLASS_LOSS_WEIGHTS is not None:
         model.class_loss_weights = torch.tensor(CLASS_LOSS_WEIGHTS).to(device)
 
-    image_processor_train = SegformerMultitaskImageProcessor.from_pretrained(
+    image_processor_train = MultitaskImageProcessor.from_pretrained(
         PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS, class_id_remap=CLASS_ID_REMAP,
     )
     image_processor_train.size = TRAIN_IMAGE_SIZE
-    image_processor_val = SegformerMultitaskImageProcessor.from_pretrained(
+    image_processor_val = MultitaskImageProcessor.from_pretrained(
         PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS, class_id_remap=CLASS_ID_REMAP,
     )
     image_processor_val.size = TRAIN_IMAGE_SIZE
