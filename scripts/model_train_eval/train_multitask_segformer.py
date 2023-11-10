@@ -120,7 +120,7 @@ def main(args):
         id2label=id2label, tasks=model_tasks, ignore_class_ids=EVAL_IGNORE_IDS, reduced_labels=DO_REDUCE_LABELS
     )
 
-    def compute_metrics(eval_pred, calculate_result=True) -> Optional[dict]:
+    def compute_metrics(tasks, eval_pred, calculate_result=True) -> Optional[dict]:
         task_names = {"logits": "semseg", "depth_pred": "depth"}
         label_names = {"logits": "labels_semantic", "depth_pred": "labels_depth"}
 
@@ -231,7 +231,7 @@ if __name__ == "__main__":
     parser.add_argument("-w", "--workers", type=int, default=0, help="Number of data loader workers.")
     parser.add_argument("-lr", "--learning-rate", type=float, default=0.00006, help="Initial learning rate for training.")
     parser.add_argument("-e", "--epochs", type=int, default=5, help="Number of epochs to run training.")
-    parser.add_argument("-bs", "--batch-size", type=int, default=4, help="Train batch size.")
+    parser.add_argument("-bs", "--batch-size", type=int, default=1, help="Train batch size.")
     parser.add_argument("-ebs", "--eval-batch-size", type=int, default=None, help="Eval batch size. Defaults to train batch size.")
     parser.add_argument("-gas", "--gradient-accumulation-steps", type=int, default=2, help="Number of gradient accumulation steps.")
     parser.add_argument("-es", "--eval-steps", type=int, default=5000, help="Number of steps between validation runs.")
