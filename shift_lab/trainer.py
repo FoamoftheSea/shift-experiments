@@ -126,7 +126,7 @@ class MultitaskTrainer(Trainer):
             self.loss_lambdas = {task: torch.tensor(1.0).to(self.args.device) for task in self.training_tasks}
         else:
             assert all([task in self.training_tasks for task in loss_lambdas.keys()]), "Invalid loss lambda passed."
-            self.loss_lambdas = {task: torch.tensor(val).to(self.args.device) for task, val in loss_lambdas}
+            self.loss_lambdas = {task: torch.tensor(val).to(self.args.device) for task, val in loss_lambdas.items()}
 
     def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
         """
