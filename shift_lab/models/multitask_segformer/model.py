@@ -2,14 +2,14 @@ from dataclasses import dataclass
 from typing import Optional, List, Union, Tuple, Dict
 
 import torch
-from shift_lab.models.segformer.metrics import DepthTrainLoss
+from shift_lab.models.multitask_segformer.metrics import DepthTrainLoss
 from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss
 from transformers import SegformerForSemanticSegmentation, GLPNConfig
 from transformers.modeling_outputs import SemanticSegmenterOutput
 from transformers.models.glpn.modeling_glpn import GLPNDecoder, GLPNDepthEstimationHead
 from transformers.utils import logging
 
-from shift_lab.models.segformer.constants import SegformerTask
+from shift_lab.models.multitask_segformer.constants import SegformerTask
 
 logger = logging.get_logger(__name__)
 

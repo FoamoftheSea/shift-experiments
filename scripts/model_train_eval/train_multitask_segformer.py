@@ -5,8 +5,9 @@ import wandb
 from argparse import ArgumentParser
 
 from shift_dev import SHIFTDataset
+from shift_dev.dataloader.shift_dataset import LoadForModel
 from shift_dev.types import Keys
-from shift_dev.dataloader.image_processors import SegformerMultitaskImageProcessor
+from shift_dev.dataloader.image_processors import MultitaskImageProcessor
 from shift_dev.utils.backend import FileBackend
 from torchvision.transforms import v2
 from transformers import (
@@ -15,11 +16,11 @@ from transformers import (
 from transformers.training_args import OptimizerNames
 from transformers.utils import logging
 
-from shift_lab.models.segformer.constants import SegformerTask
+from shift_lab.models.multitask_segformer.constants import SegformerTask
 from shift_lab.ontologies.semantic_segmentation.shift_labels import id2label as shift_id2label
-from shift_lab.models.segformer.metrics import SegformerEvalMetrics
-from shift_lab.models.segformer.model import MultitaskSegformer
-from shift_lab.models.segformer.trainer import MultitaskSegformerTrainer
+from shift_lab.models.multitask_segformer.metrics import SegformerEvalMetrics
+from shift_lab.models.multitask_segformer.model import MultitaskSegformer
+from shift_lab.trainer import MultitaskTrainer
 
 logger = logging.get_logger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -104,6 +105,7 @@ def main(args):
     keys_to_load = [
         Keys.images,  # images, shape (1, 3, H, W), uint8 (RGB)
         Keys.intrinsics,  # camera intrinsics, shape (3, 3)
+        # Keys.boxes2d,
     ]
     if args.semseg:
         keys_to_load.append(Keys.segmentation_masks)
@@ -118,7 +120,7 @@ def main(args):
         id2label=id2label, tasks=model_tasks, ignore_class_ids=EVAL_IGNORE_IDS, reduced_labels=DO_REDUCE_LABELS
     )
 
-    def compute_metrics(eval_pred, calculate_result=True) -> Optional[dict]:
+    def compute_metrics(tasks, eval_pred, calculate_result=True) -> Optional[dict]:
         task_names = {"logits": "semseg", "depth_pred": "depth"}
         label_names = {"logits": "labels_semantic", "depth_pred": "labels_depth"}
 
@@ -143,11 +145,11 @@ def main(args):
     if CLASS_LOSS_WEIGHTS is not None:
         model.class_loss_weights = torch.tensor(CLASS_LOSS_WEIGHTS).to(device)
 
-    image_processor_train = SegformerMultitaskImageProcessor.from_pretrained(
+    image_processor_train = MultitaskImageProcessor.from_pretrained(
         PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS, class_id_remap=CLASS_ID_REMAP,
     )
     image_processor_train.size = TRAIN_IMAGE_SIZE
-    image_processor_val = SegformerMultitaskImageProcessor.from_pretrained(
+    image_processor_val = MultitaskImageProcessor.from_pretrained(
         PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS, class_id_remap=CLASS_ID_REMAP,
     )
     image_processor_val.size = TRAIN_IMAGE_SIZE
@@ -165,6 +167,7 @@ def main(args):
         image_processor=image_processor_train,
         load_full_res=TRAIN_FULL_RES,
         depth_mask_semantic_ids=[label2id["sky"]],
+        load_for_model=LoadForModel.MULTITASK_SEGFORMER,
     )
 
     val_dataset = SHIFTDataset(
@@ -178,6 +181,7 @@ def main(args):
         image_processor=image_processor_val,
         load_full_res=EVAL_FULL_RES,
         depth_mask_semantic_ids=[label2id["sky"]],
+        load_for_model=LoadForModel.MULTITASK_SEGFORMER,
     )
 
     training_args = TrainingArguments(
@@ -206,7 +210,7 @@ def main(args):
         # hub_strategy="end",
     )
 
-    trainer = MultitaskSegformerTrainer(
+    trainer = MultitaskTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -227,7 +231,7 @@ if __name__ == "__main__":
     parser.add_argument("-w", "--workers", type=int, default=0, help="Number of data loader workers.")
     parser.add_argument("-lr", "--learning-rate", type=float, default=0.00006, help="Initial learning rate for training.")
     parser.add_argument("-e", "--epochs", type=int, default=5, help="Number of epochs to run training.")
-    parser.add_argument("-bs", "--batch-size", type=int, default=4, help="Train batch size.")
+    parser.add_argument("-bs", "--batch-size", type=int, default=1, help="Train batch size.")
     parser.add_argument("-ebs", "--eval-batch-size", type=int, default=None, help="Eval batch size. Defaults to train batch size.")
     parser.add_argument("-gas", "--gradient-accumulation-steps", type=int, default=2, help="Number of gradient accumulation steps.")
     parser.add_argument("-es", "--eval-steps", type=int, default=5000, help="Number of steps between validation runs.")
@@ -240,8 +244,8 @@ if __name__ == "__main__":
     parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Path to checpoint to resume training.")
     parser.add_argument("-rwb", "--resume-wandb", type=str, default=None, help="ID of run to resume")
     parser.add_argument("-eval", "--eval-only", action="store_true", default=False, help="Only run evaluation step.")
-    parser.add_argument("-semseg", "--semseg", action="store_true", default=False, help="Train semesg head.")
-    parser.add_argument("-depth", "--depth", action="store_true", default=False, help="Train depth head.")
+    parser.add_argument("-semseg", "--semseg", action="store_true", default=True, help="Train semesg head.")
+    parser.add_argument("-depth", "--depth", action="store_true", default=True, help="Train depth head.")
     parser.add_argument("-stl", "--save-total-limit", type=int, default=None, help="Maximum number of checkpoints to store at once.")
 
     args = parser.parse_args()

@@ -3,7 +3,7 @@ This repository contains a set of tools for training models with the SHIFT datas
 
 ### Models
 
-- [Multitask Segformer](./shift_lab/models/segformer) - *read the [blog post](https://hiddenlayers.tech/blog/segformer-demonstrates-powerful-multitask-performance) and [WandB Report](https://api.wandb.ai/links/indezera/4ua2bsyk)*
+- [Multitask Segformer](./shift_lab/models/multitask_segformer) - *read the [blog post](https://hiddenlayers.tech/blog/segformer-demonstrates-powerful-multitask-performance) and [WandB Report](https://api.wandb.ai/links/indezera/4ua2bsyk)*
   - Uses a single encoder (hierarchical transformer encoder from [Segformer](https://arxiv.org/abs/2105.15203)) to feed features to two task heads (possibly could be expanded to include others). Can be constructed with Segformer B0-B5 for desired accuracy/efficiency tradeoff.
     1. Semantic Segmentation from all-MLP decoding head from Segformer
     2. Monocular Depth Estimation from [GLPN](https://arxiv.org/abs/2201.07436) decoding head
@@ -31,8 +31,10 @@ If you'd prefer to work outside the Docker container, you can set up like this:
    - Windows Powershell: `./venv/Scripts/Activate.ps1`
    - Linux: `source ./venv/bin/activate`
 5. Install repo:
-   - If on linux: `export PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu117`
-   - `pip install -e .`
+   1. Set environment variable
+      - Linux: `export PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu117`
+      - Windows: `$env:PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu117"`
+   2. `pip install -e .`
 6. Install bitsandbytes:
    - git clone https://github.com/TimDettmers/bitsandbytes.git
    - cd bitsandbytes
@@ -40,4 +42,4 @@ If you'd prefer to work outside the Docker container, you can set up like this:
    - python setup.py install
    - cd ..
 7. Run a training script (Use --help to discover params):
-   - `python shift_lab/models/segformer/train_segformer.py --help`
+   - `python ./scripts/model_train_eval/train_deformable_detr.py --help`
