@@ -3,7 +3,7 @@ This repository contains a set of tools for training models with the SHIFT datas
 
 ### Models
 
-- [Multitask Segformer](./shift_lab/models/segformer) - *read the [blog post](https://hiddenlayers.tech/blog/segformer-demonstrates-powerful-multitask-performance) and [WandB Report](https://api.wandb.ai/links/indezera/4ua2bsyk)*
+- [Multitask Segformer](./shift_lab/models/multitask_segformer) - *read the [blog post](https://hiddenlayers.tech/blog/segformer-demonstrates-powerful-multitask-performance) and [WandB Report](https://api.wandb.ai/links/indezera/4ua2bsyk)*
   - Uses a single encoder (hierarchical transformer encoder from [Segformer](https://arxiv.org/abs/2105.15203)) to feed features to two task heads (possibly could be expanded to include others). Can be constructed with Segformer B0-B5 for desired accuracy/efficiency tradeoff.
     1. Semantic Segmentation from all-MLP decoding head from Segformer
     2. Monocular Depth Estimation from [GLPN](https://arxiv.org/abs/2201.07436) decoding head

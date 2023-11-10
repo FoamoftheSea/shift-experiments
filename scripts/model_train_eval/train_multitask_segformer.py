@@ -15,11 +15,11 @@ from transformers import (
 from transformers.training_args import OptimizerNames
 from transformers.utils import logging
 
-from shift_lab.models.segformer.constants import SegformerTask
+from shift_lab.models.multitask_segformer.constants import SegformerTask
 from shift_lab.ontologies.semantic_segmentation.shift_labels import id2label as shift_id2label
-from shift_lab.models.segformer.metrics import SegformerEvalMetrics
-from shift_lab.models.segformer.model import MultitaskSegformer
-from shift_lab.models.segformer.trainer import MultitaskSegformerTrainer
+from shift_lab.models.multitask_segformer.metrics import SegformerEvalMetrics
+from shift_lab.models.multitask_segformer.model import MultitaskSegformer
+from shift_lab.trainer import MultitaskTrainer
 
 logger = logging.get_logger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -206,7 +206,7 @@ def main(args):
         # hub_strategy="end",
     )
 
-    trainer = MultitaskSegformerTrainer(
+    trainer = MultitaskTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,

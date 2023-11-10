@@ -84,7 +84,7 @@ else:
     IS_SAGEMAKER_MP_POST_1_10 = False
 
 
-class MultitaskSegformerTrainer(Trainer):
+class MultitaskTrainer(Trainer):
 
     def __init__(
         self,
