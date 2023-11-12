@@ -1048,7 +1048,7 @@ class MultitaskTrainer(Trainer):
 
             if outputs is not None:
                 if hasattr(outputs, "loss_dict"):
-                    logs["loss"]["train_loss_dict"] = outputs.loss_dict
+                    logs["loss"]["train_loss_dict"] = {k: v.item() for k, v in outputs.loss_dict.items()}
 
             self._total_loss_scalar += round(sum([tr_loss_scalar[train_task] * self.loss_lambdas[train_task].cpu().numpy()]), 4)
             self._globalstep_last_logged = self.state.global_step
