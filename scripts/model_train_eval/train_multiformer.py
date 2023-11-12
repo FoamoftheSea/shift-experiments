@@ -132,31 +132,6 @@ def shift_multiformer_collator(features: List[InputDataClass]) -> Dict[str, Any]
 
 def main(args):
 
-    training_args = TrainingArguments(
-        output_dir=args.output_dir,
-        learning_rate=args.learning_rate,
-        num_train_epochs=args.epochs,
-        per_device_train_batch_size=args.batch_size,
-        per_device_eval_batch_size=args.eval_batch_size,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        save_total_limit=args.save_total_limit,
-        evaluation_strategy="steps",
-        save_strategy="steps",
-        save_steps=args.save_steps,
-        eval_steps=args.eval_steps,
-        logging_steps=1,
-        load_best_model_at_end=True,
-        dataloader_num_workers=args.workers,
-        seed=args.seed,
-        max_steps=args.max_steps,
-        tf32=args.use_tf32,
-        optim=OptimizerNames.ADAMW_8BIT if args.use_adam8bit else OptimizerNames.ADAMW_TORCH,
-        dataloader_pin_memory=False if args.workers > 0 else True,
-        compute_metrics_interval="batch",
-        include_inputs_for_metrics=True,
-        # metric_for_best_model="eval_map"
-    )
-
     image_processor_train = MultitaskImageProcessor.from_pretrained(
         PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS, class_id_remap=CLASS_ID_REMAP,
     )
@@ -242,6 +217,69 @@ def main(args):
         ignore_mismatched_sizes=True,
     )
 
+    if args.use_adam8bit:
+        import bitsandbytes as bnb
+        optimizer = bnb.optim.Adam8bit(
+            params=[
+                {"params": model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
+                {"params": model.depth_head.parameters(), "lr": args.learning_rate / 5},
+                {"params": model.semantic_head.parameters(), "lr": args.learning_rate / 5},
+                {"params": model.bbox_embed.parameters()},
+                {"params": model.class_embed.parameters()},
+                {"params": model.model.encoder.parameters()},
+                {"params": model.model.decoder.parameters()},
+                {"params": model.model.input_proj.parameters()},
+                {"params": model.model.level_embed},
+                {"params": model.model.query_position_embeddings.parameters()},
+                {"params": model.model.reference_points.parameters()},
+                {"params": model.model.backbone.parameters(), "lr": args.learning_rate / 10},
+            ],
+            lr=args.learning_rate,
+        )
+    else:
+        optimizer = torch.optim.AdamW(
+            params=[
+                {"params": model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
+                {"params": model.depth_head.parameters(), "lr": args.learning_rate / 5},
+                {"params": model.semantic_head.parameters(), "lr": args.learning_rate / 5},
+                {"params": model.bbox_embed.parameters()},
+                {"params": model.class_embed.parameters()},
+                {"params": model.model.encoder.parameters()},
+                {"params": model.model.decoder.parameters()},
+                {"params": model.model.input_proj.parameters()},
+                {"params": model.model.level_embed},
+                {"params": model.model.query_position_embeddings.parameters()},
+                {"params": model.model.reference_points.parameters()},
+                {"params": model.model.backbone.parameters(), "lr": args.learning_rate / 10},
+            ],
+            lr=args.learning_rate,
+        )
+    lr_sceduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=len(train_dataset) // (args.batch_size * args.gradient_accumulation_steps))
+    training_args = TrainingArguments(
+        output_dir=args.output_dir,
+        learning_rate=args.learning_rate,
+        num_train_epochs=args.epochs,
+        per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=args.eval_batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        save_total_limit=args.save_total_limit,
+        evaluation_strategy="steps",
+        save_strategy="steps",
+        save_steps=args.save_steps,
+        eval_steps=args.eval_steps,
+        logging_steps=1,
+        load_best_model_at_end=True,
+        dataloader_num_workers=args.workers,
+        seed=args.seed,
+        max_steps=args.max_steps,
+        tf32=args.use_tf32,
+        # optim=OptimizerNames.ADAMW_8BIT if args.use_adam8bit else OptimizerNames.ADAMW_TORCH,
+        dataloader_pin_memory=False if args.workers > 0 else True,
+        compute_metrics_interval="batch",
+        include_inputs_for_metrics=True,
+        # metric_for_best_model="eval_map"
+    )
+
     # Set loss weights to the device where loss is calculated
     if CLASS_LOSS_WEIGHTS is not None:
         model.class_loss_weights = torch.tensor(CLASS_LOSS_WEIGHTS).to(device)
@@ -254,6 +292,7 @@ def main(args):
         eval_dataset=val_dataset,
         compute_metrics=compute_metrics,
         data_collator=shift_multiformer_collator,
+        optimizers=(optimizer, lr_sceduler),
     )
 
     if args.eval_only:
@@ -266,7 +305,7 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--output_dir", type=str, default="./ddetr_test", help="Output dir to store results.")
     parser.add_argument("-d", "--data-root", type=str, default="E:/shift/", help="Path to SHIFT dataset.")
     parser.add_argument("-w", "--workers", type=int, default=0, help="Number of data loader workers.")
-    parser.add_argument("-lr", "--learning-rate", type=float, default=0.00006, help="Initial learning rate for training.")
+    parser.add_argument("-lr", "--learning-rate", type=float, default=0.0002, help="Initial learning rate for training.")
     parser.add_argument("-e", "--epochs", type=int, default=10, help="Number of epochs to run training.")
     parser.add_argument("-bs", "--batch-size", type=int, default=1, help="Train batch size.")
     parser.add_argument("-ebs", "--eval-batch-size", type=int, default=None, help="Eval batch size. Defaults to train batch size.")
