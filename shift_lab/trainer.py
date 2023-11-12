@@ -128,7 +128,9 @@ class MultitaskTrainer(Trainer):
             assert all([task in self.training_tasks for task in loss_lambdas.keys()]), "Invalid loss lambda passed."
             self.loss_lambdas = {task: torch.tensor(val).to(self.args.device) for task, val in loss_lambdas.items()}
 
-    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+    def training_step(
+            self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]], return_outputs: bool = True,
+    ) -> Union[Dict[str, torch.Tensor], Tuple[Dict[str, torch.Tensor], Any]]:
         """
         Perform a training step on a batch of inputs.
 
@@ -142,19 +144,25 @@ class MultitaskTrainer(Trainer):
 
                 The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
                 argument `labels`. Check your model's documentation for all accepted arguments.
+            return_outputs (`bool`):
+                Whether to return model outputs for logging.
 
         Return:
             `torch.Tensor`: The tensor with training loss on this batch.
         """
         model.train()
         inputs = self._prepare_inputs(inputs)
+        outputs = None
 
         if is_sagemaker_mp_enabled():
             loss_mb = smp_forward_backward(model, inputs, self.args.gradient_accumulation_steps)
             return loss_mb.reduce_mean().detach().to(self.args.device)
 
         with self.compute_loss_context_manager():
-            loss = self.compute_loss(model, inputs)
+            if return_outputs:
+                loss, outputs = self.compute_loss(model, inputs, return_outputs=return_outputs)
+            else:
+                loss = self.compute_loss(model, inputs, return_outputs=return_outputs)
 
         del inputs
         torch.cuda.empty_cache()
@@ -173,7 +181,10 @@ class MultitaskTrainer(Trainer):
         else:
             self.accelerator.backward(total_loss)
 
-        return {name: l.detach() / self.args.gradient_accumulation_steps for name, l in loss.items()}
+        loss_out = {name: l.detach() / self.args.gradient_accumulation_steps for name, l in loss.items()}
+        if outputs is not None:
+            outputs = nested_numpify(nested_detach(outputs))
+        return loss_out, outputs if return_outputs else loss_out
 
     def evaluation_loop(
         self,
@@ -457,7 +468,7 @@ class MultitaskTrainer(Trainer):
         inputs: Dict[str, Union[torch.Tensor, Any]],
         prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None,
-    ) -> Tuple[Optional[torch.Tensor], Optional[Union[Dict[str, torch.Tensor], torch.Tensor]], Optional[torch.Tensor]]:
+    ) -> Tuple[Optional[Union[Dict[str, torch.Tensor], torch.Tensor]], Optional[Union[Dict[str, torch.Tensor], torch.Tensor]], Optional[torch.Tensor]]:
         """
         Perform an evaluation step on `model` using `inputs`.
 
@@ -558,7 +569,13 @@ class MultitaskTrainer(Trainer):
         return (loss, raw_preds, labels)
 
     def _inner_training_loop(
-        self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None
+        self,
+        batch_size=None,
+        args=None,
+        resume_from_checkpoint=None,
+        trial=None,
+        ignore_keys_for_eval=None,
+        log_outputs=True,
     ):
         self.accelerator.free_memory()
         self._train_batch_size = batch_size
@@ -832,7 +849,11 @@ class MultitaskTrainer(Trainer):
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
 
                 with self.accelerator.accumulate(model):
-                    tr_loss_step = self.training_step(model, inputs)
+                    tr_loss_step = self.training_step(model, inputs, return_outputs=log_outputs)
+                    if isinstance(tr_loss_step, tuple):
+                        tr_loss_step, outputs = tr_loss_step
+                    else:
+                        outputs = None
 
                 for train_task in tr_loss.keys():
                     if (
@@ -925,7 +946,7 @@ class MultitaskTrainer(Trainer):
                     self.state.epoch = epoch + (step + 1 + steps_skipped) / steps_in_epoch
                     self.control = self.callback_handler.on_step_end(args, self.state, self.control)
 
-                    self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
+                    self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval, outputs)
                 else:
                     self.control = self.callback_handler.on_substep_end(args, self.state, self.control)
 
@@ -1004,7 +1025,7 @@ class MultitaskTrainer(Trainer):
 
         return TrainOutput(self.state.global_step, train_loss, metrics)
 
-    def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch, ignore_keys_for_eval):
+    def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch, ignore_keys_for_eval, outputs=None):
         if self.control.should_log:
             if is_torch_tpu_available():
                 xm.mark_step()
@@ -1024,6 +1045,10 @@ class MultitaskTrainer(Trainer):
                 logs["loss"][train_task] = task_loss
                 logs["loss"]["train_loss"] += round(self.loss_lambdas[train_task].cpu().numpy() * task_loss, 4)
             logs["learning_rate"] = self._get_learning_rate()
+
+            if outputs is not None:
+                if hasattr(outputs, "loss_dict"):
+                    logs["loss"]["train_loss_dict"] = outputs.loss_dict
 
             self._total_loss_scalar += round(sum([tr_loss_scalar[train_task] * self.loss_lambdas[train_task].cpu().numpy()]), 4)
             self._globalstep_last_logged = self.state.global_step

@@ -1,3 +1,4 @@
+import sys
 from argparse import ArgumentParser
 from typing import Optional, List, Dict, Any, Mapping
 
@@ -152,6 +153,7 @@ def main(args):
         optim=OptimizerNames.ADAMW_8BIT if args.use_adam8bit else OptimizerNames.ADAMW_TORCH,
         dataloader_pin_memory=False if args.workers > 0 else True,
         compute_metrics_interval="batch",
+        include_inputs_for_metrics=True,
         # metric_for_best_model="eval_map"
     )
 
@@ -170,6 +172,7 @@ def main(args):
         Keys.boxes2d,
         Keys.segmentation_masks,
         Keys.depth_maps,
+        # Keys.masks,
     ]
 
     train_dataset = SHIFTDataset(
@@ -202,10 +205,13 @@ def main(args):
 
     label2id_boxes2d = train_dataset.scalabel_datasets["front/det_2d"].cats_name2id["boxes2d_classes"]
     id2label_boxes2d = {v: k for k, v in label2id_boxes2d.items()}
-    id2label_boxes2d[6] = "no_box"
 
-    model = Multiformer(
-        MultiformerConfig(
+    if sys.platform.startswith("win"):
+        prefix = "C:"
+    else:
+        prefix = "/mnt/c"
+    model_name_or_path = f"{prefix}/Users/Nate/transformers/ddetr_test1/pytorch_model.bin"
+    model_config =  MultiformerConfig(
             use_timm_backbone=False,
             backbone="pvt_v2",
             backbone_config=PvtV2Config(
@@ -222,21 +228,26 @@ def main(args):
             decoder_layers=3,
             decoder_ffn_dim=256,
             id2label=id2label_boxes2d,
-            # num_labels=7,
             num_queries=300,
-            # backbone_config=ResNetConfig(out_indices=[1, 2, 3])),
         )
+    # model_config = MultiformerConfig.from_pretrained(
+    #     model_name_or_path,
+    #     id2label=id2label_boxes2d,
+    #     label2id=label2id_boxes2d,
+    #     num_labels=len(id2label_boxes2d),
+    # )
+    model = Multiformer.from_pretrained(
+        model_name_or_path,
+        config=model_config,
+        ignore_mismatched_sizes=True,
     )
-
-    state_dict = torch.load("C:/Users/Nate/transformers/src/transformers/models/multiformer/multiformer_w0_lr6e-5_e10_bs1_gas8_s42_tf32_mv_bnb/checkpoint-10000/pytorch_model.bin")
-    model.load_state_dict(state_dict)
 
     # Set loss weights to the device where loss is calculated
     if CLASS_LOSS_WEIGHTS is not None:
         model.class_loss_weights = torch.tensor(CLASS_LOSS_WEIGHTS).to(device)
 
     trainer = MultitaskTrainer(
-        training_tasks={"det_2d", "semseg", "depth"},
+        loss_lambdas={"det_2d": 1.0, "semseg": 5.0, "depth": 1.0},
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -260,7 +271,7 @@ if __name__ == "__main__":
     parser.add_argument("-bs", "--batch-size", type=int, default=1, help="Train batch size.")
     parser.add_argument("-ebs", "--eval-batch-size", type=int, default=None, help="Eval batch size. Defaults to train batch size.")
     parser.add_argument("-gas", "--gradient-accumulation-steps", type=int, default=8, help="Number of gradient accumulation steps.")
-    parser.add_argument("-es", "--eval-steps", type=int, default=2500, help="Number of steps between validation runs.")
+    parser.add_argument("-es", "--eval-steps", type=int, default=1000, help="Number of steps between validation runs.")
     parser.add_argument("-ss", "--save-steps", type=int, default=None, help="Number of steps between checkpoints. Defaults to eval steps.")
     parser.add_argument("-ms", "--max-steps", type=int, default=-1, help="Set to limit the number of total training steps.")
     parser.add_argument("-s", "--seed", type=int, default=42, help="Random seed for training.")
