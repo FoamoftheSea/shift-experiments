@@ -181,12 +181,12 @@ def main(args):
     label2id_boxes2d = train_dataset.scalabel_datasets["front/det_2d"].cats_name2id["boxes2d_classes"]
     id2label_boxes2d = {v: k for k, v in label2id_boxes2d.items()}
 
-    if sys.platform.startswith("win"):
-        prefix = "C:"
-    else:
-        prefix = "/mnt/c"
-    model_name_or_path = f"{prefix}/Users/Nate/transformers/ddetr_test1/pytorch_model.bin"
-    model_config =  MultiformerConfig(
+    # if sys.platform.startswith("win"):
+    #     prefix = "C:"
+    # else:
+    #     prefix = "/mnt/c"
+    # model_name_or_path = f"{prefix}/Users/Nate/transformers/ddetr_test1/pytorch_model.bin"
+    model_config = MultiformerConfig(
             use_timm_backbone=False,
             backbone="pvt_v2",
             backbone_config=PvtV2Config(
@@ -206,13 +206,13 @@ def main(args):
             num_queries=300,
         )
     # model_config = MultiformerConfig.from_pretrained(
-    #     model_name_or_path,
+    #     args.checkpoint,
     #     id2label=id2label_boxes2d,
     #     label2id=label2id_boxes2d,
     #     num_labels=len(id2label_boxes2d),
     # )
     model = Multiformer.from_pretrained(
-        model_name_or_path,
+        args.checkpoint,
         config=model_config,
         ignore_mismatched_sizes=True,
     )
@@ -239,9 +239,6 @@ def main(args):
     else:
         optimizer = torch.optim.AdamW(
             params=[
-                {"params": model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.depth_head.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.semantic_head.parameters(), "lr": args.learning_rate / 5},
                 {"params": model.bbox_embed.parameters()},
                 {"params": model.class_embed.parameters()},
                 {"params": model.model.encoder.parameters()},
@@ -250,11 +247,14 @@ def main(args):
                 {"params": model.model.level_embed},
                 {"params": model.model.query_position_embeddings.parameters()},
                 {"params": model.model.reference_points.parameters()},
+                {"params": model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
+                {"params": model.depth_head.parameters(), "lr": args.learning_rate / 5},
+                {"params": model.semantic_head.parameters(), "lr": args.learning_rate / 5},
                 {"params": model.model.backbone.parameters(), "lr": args.learning_rate / 10},
             ],
             lr=args.learning_rate,
         )
-    lr_sceduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=len(train_dataset) // (args.batch_size * args.gradient_accumulation_steps))
+    lr_sceduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=len(train_dataset))
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         learning_rate=args.learning_rate,
@@ -298,7 +298,7 @@ def main(args):
     if args.eval_only:
         trainer.evaluate()
     else:
-        trainer.train()
+        trainer.train(resume_from_checkpoint=args.checkpoint)
 
 if __name__ == "__main__":
     parser = ArgumentParser()
