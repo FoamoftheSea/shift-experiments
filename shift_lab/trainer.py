@@ -10,7 +10,7 @@ import torch
 import torch.distributed as dist
 from packaging import version
 from torch import nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, RandomSampler
 from transformers import (
     TrainingArguments,
     Trainer,
@@ -20,8 +20,9 @@ from transformers import (
 from transformers.data.data_collator import DataCollator
 from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
 from transformers.deepspeed import deepspeed_init, deepspeed_load_checkpoint
-from transformers.integrations import hp_params
+from transformers.integrations import hp_params, is_deepspeed_available
 from transformers.modeling_utils import PreTrainedModel
+from transformers.pytorch_utils import is_torch_less_than_1_11
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer import TRAINER_STATE_NAME
 from transformers.trainer_callback import (
@@ -35,13 +36,13 @@ from transformers.trainer_pt_utils import (
     nested_detach,
     nested_numpify,
     get_model_param_count,
+    get_dataloader_sampler,
 )
 from transformers.trainer_utils import (
     HPSearchBackend,
     EvalLoopOutput,
     denumpify_detensorize,
     has_length,
-    ShardedDDPOption,
     speed_metrics,
     TrainOutput,
 )
@@ -68,6 +69,15 @@ if is_accelerate_available():
             save_fsdp_model,
             save_fsdp_optimizer,
         )
+    DATA_SAMPLERS = [RandomSampler]
+    if version.parse(accelerate_version) > version.parse("0.23.0"):
+        from accelerate.data_loader import SeedableRandomSampler
+
+        DATA_SAMPLERS += [SeedableRandomSampler]
+
+    if is_deepspeed_available():
+        from accelerate.utils import DeepSpeedSchedulerWrapper
+
 
 if is_torch_tpu_available(check_device=False):
     import torch_xla.core.xla_model as xm
@@ -280,7 +290,7 @@ class MultitaskTrainer(Trainer):
                     batch_size = observed_batch_size
 
             # Prediction step
-            loss, preds, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
+            loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
             main_input_name = getattr(self.model, "main_input_name", "input_ids")
             inputs_decode = self._prepare_input(inputs[main_input_name]) if args.include_inputs_for_metrics else None
 
@@ -304,15 +314,15 @@ class MultitaskTrainer(Trainer):
                     if inputs_host is None
                     else nested_concat(inputs_host, inputs_decode, padding_index=-100)
                 )
-            if preds is not None:
-                preds = self.accelerator.pad_across_processes(preds, dim=1, pad_index=-100)
+            if logits is not None:
+                logits = self.accelerator.pad_across_processes(logits, dim=1, pad_index=-100)
                 if self.preprocess_logits_for_metrics is not None:
-                    preds = self.preprocess_logits_for_metrics(preds, labels)
-                preds = self.accelerator.gather_for_metrics((preds))
-                preds_host = preds if preds_host is None else nested_concat(preds_host, preds, padding_index=-100)
+                    logits = self.preprocess_logits_for_metrics(logits, labels)
+                logits = self.gather_function((logits))
+                preds_host = logits if preds_host is None else nested_concat(preds_host, preds, padding_index=-100)
 
             if labels is not None:
-                labels = self.accelerator.gather_for_metrics((labels))
+                labels = self.gather_function((labels))
                 labels_host = labels if labels_host is None else nested_concat(labels_host, labels, padding_index=-100)
 
             self.control = self.callback_handler.on_prediction_step(args, self.state, self.control)
@@ -355,9 +365,8 @@ class MultitaskTrainer(Trainer):
                 self.compute_metrics_interval == "full"
                 and args.eval_accumulation_steps is not None
                 and (step + 1) % args.eval_accumulation_steps == 0
-                and self.accelerator.sync_gradients
+                and (self.accelerator.sync_gradients or version.parse(accelerate_version) > version.parse("0.20.3"))
             ):
-                # Gather all tensors and put them back on the CPU if we have done enough accumulation steps.
                 if losses_host is not None:
                     losses = nested_numpify(losses_host)
                     all_losses = (
@@ -386,6 +395,8 @@ class MultitaskTrainer(Trainer):
                 # Set back to None to begin a new accumulation
                 losses_host, preds_host, inputs_host, labels_host = None, None, None, None
 
+        # After all calls to `.gather_function`, reset to `gather_for_metrics`:
+        self.gather_function = self.accelerator.gather_for_metrics
         if args.past_index and hasattr(self, "_past"):
             # Clean the state at the end of the evaluation loop
             delattr(self, "_past")
@@ -490,7 +501,7 @@ class MultitaskTrainer(Trainer):
 
         Return:
             Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]: A tuple with the loss,
-            raw_predisctions, and labels (each being optional).
+            logits and labels (each being optional).
         """
         provided_labels = [k for k in self.label_names if inputs.get(k) is not None]
         has_labels = False if len(self.label_names) == 0 else len(provided_labels) > 0
@@ -529,14 +540,14 @@ class MultitaskTrainer(Trainer):
                         logits_mb = raw_outputs[1:]
 
                     loss = loss_mb.reduce_mean().detach().cpu()
-                    raw_preds = smp_nested_concat(logits_mb)
+                    logits = smp_nested_concat(logits_mb)
                 else:
                     loss = None
                     if isinstance(raw_outputs, dict):
                         logits_mb = tuple(v for k, v in raw_outputs.items() if k not in ignore_keys)
                     else:
                         logits_mb = raw_outputs
-                    raw_preds = smp_nested_concat(logits_mb)
+                    logits = smp_nested_concat(logits_mb)
             else:
                 if has_labels or loss_without_labels:
                     with self.compute_loss_context_manager():
@@ -544,29 +555,29 @@ class MultitaskTrainer(Trainer):
                     loss = {task_name: l.mean().detach() for task_name, l in loss.items()}
 
                     if isinstance(outputs, dict):
-                        raw_preds = {k: v for k, v in outputs.items() if k not in ignore_keys + ["loss"]}
+                        logits = {k: v for k, v in outputs.items() if k not in ignore_keys + ["loss"]}
                     else:
-                        raw_preds = outputs[1:]
+                        logits = outputs[1:]
                 else:
                     loss = None
                     with self.compute_loss_context_manager():
                         outputs = model(**inputs)
                     if isinstance(outputs, dict):
-                        raw_preds = tuple(v for k, v in outputs.items() if k not in ignore_keys)
+                        logits = tuple(v for k, v in outputs.items() if k not in ignore_keys)
                     else:
-                        raw_preds = outputs
-                    # This needs to be fixed and made cleaner later.
+                        logits = outputs
+                    # TODO: this needs to be fixed and made cleaner later.
                     if self.args.past_index >= 0:
                         self._past = outputs[self.args.past_index - 1]
 
         if prediction_loss_only:
             return (loss, None, None)
 
-        raw_preds = nested_detach(raw_preds)
-        # if len(raw_preds) == 1:
-        #     raw_preds = raw_preds[0]
+        logits = nested_detach(logits)
+        # if len(logits) == 1:
+        #     logits = logits[0]
 
-        return (loss, raw_preds, labels)
+        return (loss, logits, labels)
 
     def _inner_training_loop(
         self,
@@ -590,6 +601,7 @@ class MultitaskTrainer(Trainer):
         total_train_batch_size = self._train_batch_size * args.gradient_accumulation_steps * args.world_size
 
         len_dataloader = None
+        num_train_tokens = None
         if has_length(train_dataloader):
             len_dataloader = len(train_dataloader)
             num_update_steps_per_epoch = len_dataloader // args.gradient_accumulation_steps
@@ -603,10 +615,16 @@ class MultitaskTrainer(Trainer):
                 # May be slightly incorrect if the last batch in the training dataloader has a smaller size but it's
                 # the best we can do.
                 num_train_samples = args.max_steps * total_train_batch_size
+                if args.include_tokens_per_second:
+                    num_train_tokens = (
+                        self.num_tokens(train_dataloader, args.max_steps) * args.gradient_accumulation_steps
+                    )
             else:
                 max_steps = math.ceil(args.num_train_epochs * num_update_steps_per_epoch)
                 num_train_epochs = math.ceil(args.num_train_epochs)
                 num_train_samples = self.num_examples(train_dataloader) * args.num_train_epochs
+                if args.include_tokens_per_second:
+                    num_train_tokens = self.num_tokens(train_dataloader) * args.num_train_epochs
         elif args.max_steps > 0:  # Rely on max_steps when dataloader does not have a working size
             max_steps = args.max_steps
             # Setting a very large number of epochs so we go as many times as necessary over the iterator.
@@ -614,6 +632,8 @@ class MultitaskTrainer(Trainer):
             num_update_steps_per_epoch = max_steps
             num_examples = total_train_batch_size * args.max_steps
             num_train_samples = args.max_steps * total_train_batch_size
+            if args.include_tokens_per_second:
+                num_train_tokens = self.num_tokens(train_dataloader, args.max_steps) * args.gradient_accumulation_steps
         else:
             raise ValueError(
                 "args.max_steps must be set to a positive value if dataloader does not have a length, was"
@@ -631,13 +651,7 @@ class MultitaskTrainer(Trainer):
             else:
                 debug_overflow = DebugUnderflowOverflow(self.model)  # noqa
 
-        delay_optimizer_creation = (
-            self.sharded_ddp is not None
-            and self.sharded_ddp != ShardedDDPOption.SIMPLE
-            or is_sagemaker_mp_enabled()
-            or self.fsdp is not None
-            or self.is_fsdp_enabled
-        )
+        delay_optimizer_creation = is_sagemaker_mp_enabled() or self.fsdp is not None or self.is_fsdp_enabled
 
         # We need to reset the scheduler, as its parameters may be different on subsequent calls
         if self._created_lr_scheduler:
@@ -672,16 +686,18 @@ class MultitaskTrainer(Trainer):
 
         # Activate gradient checkpointing if needed
         if args.gradient_checkpointing:
-            self.model.gradient_checkpointing_enable()
+            if args.gradient_checkpointing_kwargs is None:
+                gradient_checkpointing_kwargs = {}
+            else:
+                gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs
+
+            self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)
 
         model = self._wrap_model(self.model_wrapped)
 
-        if (is_sagemaker_mp_enabled() or self.is_fsdp_enabled) and resume_from_checkpoint is not None:
-            self._load_from_checkpoint(resume_from_checkpoint, model)
-
         # as the model is wrapped, don't use `accelerator.prepare`
         # this is for unhandled cases such as
-        # Fairscale Sharded DDP, FSDP-XLA, SageMaker MP/DP, DataParallel, IPEX
+        # FSDP-XLA, SageMaker MP/DP, DataParallel, IPEX
         use_accelerator_prepare = True if model is self.model else False
 
         if delay_optimizer_creation:
@@ -704,7 +720,7 @@ class MultitaskTrainer(Trainer):
                 )
 
         if self.is_fsdp_enabled:
-            self.model = model
+            self.model = self.model_wrapped = model
 
         # for the rest of this function `model` is the outside model, whether it was wrapped or not
         if model is not self.model:
@@ -714,16 +730,20 @@ class MultitaskTrainer(Trainer):
         if self.is_deepspeed_enabled:
             self.deepspeed = self.model_wrapped
 
-        # deepspeed ckpt loading
-        if resume_from_checkpoint is not None and self.is_deepspeed_enabled:
-            deepspeed_load_checkpoint(self.model_wrapped, resume_from_checkpoint)
+        # ckpt loading
+        if resume_from_checkpoint is not None:
+            if self.is_deepspeed_enabled:
+                deepspeed_load_checkpoint(self.model_wrapped, resume_from_checkpoint)
+            elif is_sagemaker_mp_enabled() or self.is_fsdp_enabled:
+                self._load_from_checkpoint(resume_from_checkpoint, self.model_wrapped)
 
         # Check if saved optimizer or scheduler states exist
         self._load_optimizer_and_scheduler(resume_from_checkpoint)
 
         # important: at this point:
         # self.model         is the Transformers Model
-        # self.model_wrapped is DDP(Transformers Model), Deepspeed(Transformers Model), etc.
+        # self.model_wrapped is DDP(Transformers Model), Deepspeed(Transformers Model),
+        # FSDP(Transformers Model), Dynamo Optimized Module(Transformers Model) etc.
 
         # Train!
         logger.info("***** Running training *****")
@@ -797,12 +817,26 @@ class MultitaskTrainer(Trainer):
         # Skip the first epochs_trained epochs to get the random state of the dataloader at the right point.
         if not args.ignore_data_skip:
             for epoch in range(epochs_trained):
-                for _ in train_dataloader:
-                    break
+                sampler = get_dataloader_sampler(train_dataloader)
+                sampler_kinds = [RandomSampler]
+                if version.parse(accelerate_version) > version.parse("0.23.0"):
+                    sampler_kinds.append(SeedableRandomSampler)
+                is_random_sampler = isinstance(sampler, tuple(sampler_kinds))
+                if is_torch_less_than_1_11 or not is_random_sampler:
+                    # We just need to begin an iteration to create the randomization of the sampler.
+                    for _ in train_dataloader:
+                        break
+                else:
+                    # Otherwise we need to call the whooooole sampler cause there is some random operation added
+                    # AT THE VERY END!
+                    sampler = sampler if sampler is not None else []
+                    _ = list(sampler)
 
         total_batched_samples = 0
         for epoch in range(epochs_trained, num_train_epochs):
             epoch_iterator = train_dataloader
+            if hasattr(epoch_iterator, "set_epoch"):
+                epoch_iterator.set_epoch(epoch)
 
             # Reset the past mems state at the beginning of each epoch if necessary.
             if args.past_index >= 0:
@@ -829,6 +863,17 @@ class MultitaskTrainer(Trainer):
             step = -1
             for step, inputs in enumerate(epoch_iterator):
                 total_batched_samples += 1
+
+                if self.args.include_num_input_tokens_seen:
+                    main_input_name = getattr(self.model, "main_input_name", "input_ids")
+                    if main_input_name not in inputs:
+                        logger.warning(
+                            "Tried to track the number of tokens seen, however the current model is "
+                            "not configured properly to know what item is the input. To fix this, add "
+                            "a `main_input_name` attribute to the model class you are using."
+                        )
+                    else:
+                        self.state.num_input_tokens_seen += self.accelerator.gather(inputs[main_input_name]).numel()
                 if rng_to_sync:
                     self._load_rng_state(resume_from_checkpoint)
                     rng_to_sync = False
@@ -889,22 +934,8 @@ class MultitaskTrainer(Trainer):
                     if args.max_grad_norm is not None and args.max_grad_norm > 0:
                         # deepspeed does its own clipping
 
-                        if self.do_grad_scaling:
-                            # Reduce gradients first for XLA
-                            if is_torch_tpu_available():
-                                gradients = xm._fetch_gradients(self.optimizer)
-                                xm.all_reduce("sum", gradients, scale=1.0 / xm.xrt_world_size())
-                            # AMP: gradients need unscaling
-                            self.scaler.unscale_(self.optimizer)
-
                         if is_sagemaker_mp_enabled() and args.fp16:
                             self.optimizer.clip_master_grads(args.max_grad_norm)
-                        elif hasattr(self.optimizer, "clip_grad_norm"):
-                            # Some optimizers (like the sharded optimizer) have a specific way to do gradient clipping
-                            self.optimizer.clip_grad_norm(args.max_grad_norm)
-                        elif hasattr(model, "clip_grad_norm_"):
-                            # Some models (like FullyShardedDDP) have a specific way to do gradient clipping
-                            model.clip_grad_norm_(args.max_grad_norm)
                         elif self.use_apex:
                             # Revert to normal clipping otherwise, handling Apex or full precision
                             nn.utils.clip_grad_norm_(
@@ -981,7 +1012,7 @@ class MultitaskTrainer(Trainer):
 
         logger.info("\n\nTraining completed. Do not forget to share your model on huggingface.co/models =)\n\n")
         if args.load_best_model_at_end and self.state.best_model_checkpoint is not None:
-            # Wait for everyone to get here so we are sur the model has been saved by process 0.
+            # Wait for everyone to get here so we are sure the model has been saved by process 0.
             if is_torch_tpu_available():
                 xm.rendezvous("load_best_model_at_end")
             elif args.parallel_mode == ParallelMode.DISTRIBUTED:
@@ -997,7 +1028,13 @@ class MultitaskTrainer(Trainer):
         )
         train_loss = self._total_loss_scalar / self.state.global_step
 
-        metrics = speed_metrics("train", start_time, num_samples=num_train_samples, num_steps=self.state.max_steps)
+        metrics = speed_metrics(
+            "train",
+            start_time,
+            num_samples=num_train_samples,
+            num_steps=self.state.max_steps,
+            num_tokens=num_train_tokens,
+        )
         self.store_flos()
         metrics["total_flos"] = self.state.total_flos
         metrics["train_loss"] = train_loss
@@ -1022,6 +1059,11 @@ class MultitaskTrainer(Trainer):
 
         # Wait for the checkpoint to be uploaded.
         self._finish_current_push()
+
+        # After training we make sure to retrieve back the original forward pass method
+        # for the embedding layer by removing the forward post hook.
+        if self.neftune_noise_alpha is not None:
+            self._deactivate_neftune(self.model)
 
         return TrainOutput(self.state.global_step, train_loss, metrics)
 

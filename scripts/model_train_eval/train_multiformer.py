@@ -275,7 +275,6 @@ def main(args):
         tf32=args.use_tf32,
         # optim=OptimizerNames.ADAMW_8BIT if args.use_adam8bit else OptimizerNames.ADAMW_TORCH,
         dataloader_pin_memory=False if args.workers > 0 else True,
-        compute_metrics_interval="batch",
         include_inputs_for_metrics=True,
         # metric_for_best_model="eval_map"
     )
@@ -293,6 +292,7 @@ def main(args):
         compute_metrics=compute_metrics,
         data_collator=shift_multiformer_collator,
         optimizers=(optimizer, lr_sceduler),
+        compute_metrics_interval="batch",
     )
 
     if args.eval_only:
