@@ -183,9 +183,8 @@ class MultitaskTrainer(Trainer):
         total_loss = None
         for name, l in loss.items():
             total_loss = l * self.loss_lambdas[name] if total_loss is None else total_loss + l * self.loss_lambdas[name]
-        if self.do_grad_scaling:
-            self.scaler.scale(total_loss).backward()
-        elif self.use_apex:
+
+        if self.use_apex:
             with amp.scale_loss(total_loss, self.optimizer) as scaled_loss:
                 scaled_loss.backward()
         else:
@@ -949,24 +948,8 @@ class MultitaskTrainer(Trainer):
                             )
 
                     # Optimizer step
-                    optimizer_was_run = True
-                    if is_torch_tpu_available():
-                        if self.do_grad_scaling:
-                            self.scaler.step(self.optimizer)
-                            self.scaler.update()
-                        else:
-                            # tpu-comment: accelerate wrapped optimizers call xm.optimizer_step
-                            self.optimizer.step()
-                    elif self.do_grad_scaling:
-                        scale_before = self.scaler.get_scale()
-                        self.scaler.step(self.optimizer)
-                        self.scaler.update()
-                        scale_after = self.scaler.get_scale()
-                        optimizer_was_run = scale_before <= scale_after
-                    else:
-                        self.optimizer.step()
-                        optimizer_was_run = not self.accelerator.optimizer_step_was_skipped
-
+                    self.optimizer.step()
+                    optimizer_was_run = not self.accelerator.optimizer_step_was_skipped
                     if optimizer_was_run:
                         # Delay optimizer scheduling until metrics are generated
                         if not isinstance(self.lr_scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
