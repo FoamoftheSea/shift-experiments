@@ -204,6 +204,8 @@ def main(args):
             decoder_ffn_dim=256,
             id2label=id2label_boxes2d,
             num_queries=300,
+            det2d_input_feature_levels=[1, 2, 3],
+            det2d_extra_feature_levels=1,
         )
     # model_config = MultiformerConfig.from_pretrained(
     #     args.checkpoint,
