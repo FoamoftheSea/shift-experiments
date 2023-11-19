@@ -213,11 +213,14 @@ def main(args):
     #     label2id=label2id_boxes2d,
     #     num_labels=len(id2label_boxes2d),
     # )
-    model = Multiformer.from_pretrained(
-        args.checkpoint,
-        config=model_config,
-        ignore_mismatched_sizes=True,
-    )
+    if args.checkpoint is not None:
+        model = Multiformer.from_pretrained(
+            args.checkpoint,
+            config=model_config,
+            ignore_mismatched_sizes=True,
+        )
+    else:
+        model = Multiformer(config=model_config)
 
     if args.use_adam8bit:
         import bitsandbytes as bnb
