@@ -221,7 +221,7 @@ def main(args):
         )
     else:
         model = Multiformer(config=model_config)
-        model.load_state_dict(torch.load("/mnt/multiformer/checkpoint-0/multiformer_pretrained_weights.bin"))
+        # model.load_state_dict(torch.load("C:/Users/Nate/shift-experiments/multiformer_pretrained_weights.bin"))
 
     if args.use_adam8bit:
         import bitsandbytes as bnb
