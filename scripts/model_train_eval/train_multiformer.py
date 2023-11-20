@@ -304,7 +304,7 @@ def main(args):
     if args.eval_only:
         trainer.evaluate()
     else:
-        trainer.train(resume_from_checkpoint=args.checkpoint)
+        trainer.train(resume_from_checkpoint=args.checkpoint if args.trainer_resume else None)
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -330,6 +330,7 @@ if __name__ == "__main__":
     parser.add_argument("-depth", "--depth", action="store_true", default=False, help="Train depth head.")
     parser.add_argument("-stl", "--save-total-limit", type=int, default=None, help="Maximum number of checkpoints to store at once.")
     parser.add_argument("-zip", "--load-zip", action="store_true", default=False, help="Train with zipped archives.")
+    parser.add_argument("-tr", "--trainer_resume", action="store_true", default=False, help="Whether to resume trainer state with checkpoint load.")
 
     args = parser.parse_args()
     if args.eval_batch_size is None:
