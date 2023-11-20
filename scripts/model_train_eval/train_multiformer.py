@@ -10,7 +10,7 @@ from shift_dev.dataloader.image_processors import MultitaskImageProcessor
 from shift_lab.trainer import MultitaskTrainer
 from shift_lab.ontologies.semantic_segmentation.shift_labels import id2label as shift_id2label
 from shift_dev.types import Keys
-from shift_dev.utils.backend import FileBackend
+from shift_dev.utils.backend import FileBackend, ZipBackend
 from torchvision.transforms import v2
 
 from transformers.data.data_collator import InputDataClass
@@ -156,7 +156,7 @@ def main(args):
         keys_to_load=keys_to_load,
         views_to_load=["front"],  # SHIFTDataset.VIEWS.remove("center"),
         shift_type="discrete",          # also supports "continuous/1x", "continuous/10x", "continuous/100x"
-        backend=FileBackend(),           # also supports HDF5Backend(), FileBackend()
+        backend=ZipBackend() if args.load_zip else FileBackend(),           # also supports HDF5Backend(), FileBackend()
         verbose=True,
         image_transforms=IMAGE_TRANSFORMS,
         frame_transforms=FRAME_TRANSFORMS,
@@ -171,7 +171,7 @@ def main(args):
         keys_to_load=keys_to_load,
         views_to_load=["front"],  # SHIFTDataset.VIEWS.remove("center"),
         shift_type="discrete",
-        backend=FileBackend(),
+        backend=ZipBackend() if args.load_zip else FileBackend(),
         verbose=True,
         image_processor=image_processor_val,
         load_full_res=EVAL_FULL_RES,
@@ -328,6 +328,7 @@ if __name__ == "__main__":
     parser.add_argument("-semseg", "--semseg", action="store_true", default=False, help="Train semesg head.")
     parser.add_argument("-depth", "--depth", action="store_true", default=False, help="Train depth head.")
     parser.add_argument("-stl", "--save-total-limit", type=int, default=None, help="Maximum number of checkpoints to store at once.")
+    parser.add_argument("-zip", "--load-zip", action="store_true", default=False, help="Train with zipped archives.")
 
     args = parser.parse_args()
     if args.eval_batch_size is None:
