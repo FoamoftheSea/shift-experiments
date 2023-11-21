@@ -69,6 +69,7 @@ TRAIN_FULL_RES = True
 EVAL_FULL_RES = True
 DO_REDUCE_LABELS = True
 PRETRAINED_MODEL_NAME = "nvidia/mit-b0"
+DET2D_BOX_KEEP_PROB = 0.5
 TRAIN_IMAGE_SIZE = {"height": 800, "width": 1280}
 CLASS_ID_REMAP = None
 IMAGE_TRANSFORMS = [
@@ -76,7 +77,7 @@ IMAGE_TRANSFORMS = [
 ]
 FRAME_TRANSFORMS = []
 
-mean_ap_metric = MultiformerMetric(id2label=id2label)
+mean_ap_metric = MultiformerMetric(id2label=id2label, box_score_threshold=DET2D_BOX_KEEP_PROB)
 
 
 def compute_metrics(
@@ -206,6 +207,7 @@ def main(args):
             det2d_input_proj_kernels=[2, 1, 1, 1],
             det2d_input_proj_strides=[2, 1, 1, 1],
             det2d_extra_feature_levels=1,
+            det2d_box_keep_prob=DET2D_BOX_KEEP_PROB,
         )
     # model_config = MultiformerConfig.from_pretrained(
     #     args.checkpoint,
