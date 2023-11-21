@@ -227,9 +227,6 @@ def main(args):
         import bitsandbytes as bnb
         optimizer = bnb.optim.Adam8bit(
             params=[
-                {"params": model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.depth_head.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.semantic_head.parameters(), "lr": args.learning_rate / 5},
                 {"params": model.bbox_embed.parameters()},
                 {"params": model.class_embed.parameters()},
                 {"params": model.model.encoder.parameters()},
@@ -238,6 +235,9 @@ def main(args):
                 {"params": model.model.level_embed},
                 {"params": model.model.query_position_embeddings.parameters()},
                 {"params": model.model.reference_points.parameters()},
+                {"params": model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
+                {"params": model.depth_head.parameters(), "lr": args.learning_rate / 5},
+                {"params": model.semantic_head.parameters(), "lr": args.learning_rate / 5},
                 {"params": model.model.backbone.parameters(), "lr": args.learning_rate / 10},
             ],
             lr=args.learning_rate,
