@@ -63,8 +63,6 @@ if DO_REDUCE_LABELS and 0 in id2label.keys():
 logger = logging.get_logger(__name__)
 logger.setLevel(logging.DEBUG)
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
 # AutoBackbone.register(PvtV2Config, PvtV2Model)
 
 TRAIN_FULL_RES = True
@@ -281,15 +279,15 @@ def main(args):
         seed=args.seed,
         max_steps=args.max_steps,
         tf32=args.use_tf32,
-        # optim=OptimizerNames.ADAMW_8BIT if args.use_adam8bit else OptimizerNames.ADAMW_TORCH,
         dataloader_pin_memory=False if args.workers > 0 else True,
         include_inputs_for_metrics=True,
-        # metric_for_best_model="eval_map"
+        use_cpu=args.cpu,
+        # metric_for_best_model="eval_map",
     )
 
     # Set loss weights to the device where loss is calculated
     if CLASS_LOSS_WEIGHTS is not None:
-        model.class_loss_weights = torch.tensor(CLASS_LOSS_WEIGHTS).to(device)
+        model.class_loss_weights = torch.tensor(CLASS_LOSS_WEIGHTS).to(args.device)
 
     trainer = MultitaskTrainer(
         loss_lambdas={"det_2d": 1.0, "semseg": 5.0, "depth": 1.0},
@@ -333,12 +331,18 @@ if __name__ == "__main__":
     parser.add_argument("-stl", "--save-total-limit", type=int, default=None, help="Maximum number of checkpoints to store at once.")
     parser.add_argument("-zip", "--load-zip", action="store_true", default=False, help="Train with zipped archives.")
     parser.add_argument("-tr", "--trainer_resume", action="store_true", default=False, help="Whether to resume trainer state with checkpoint load.")
+    parser.add_argument("-cpu", "--cpu", action="store_true", default=False, help="Force CPU training.")
 
     args = parser.parse_args()
     if args.eval_batch_size is None:
         args.eval_batch_size = args.batch_size
     if args.save_steps is None:
         args.save_steps = args.eval_steps
+
+    if args.cpu:
+        args.device = "cpu"
+    else:
+        args.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     if args.use_tf32:
         logger.info("Using TF32 dtype.")
