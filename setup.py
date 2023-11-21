@@ -9,7 +9,7 @@ setup(
     dependency_links=["https://download.pytorch.org/whl/cu117"],
     install_requires=[
         "wandb==0.15.8",
-        "transformers[torch] @ git+https://github.com/FoamoftheSea/transformers.git@multiformer",
+        "transformers[torch] @ git+https://github.com/FoamoftheSea/transformers.git@multiformer-dev",
         "evaluate==0.4.0",
         "shift_dev @ git+https://github.com/FoamoftheSea/shift-dev.git@bbox-loading",
         "torchmetrics==1.2.0",
