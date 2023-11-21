@@ -12,7 +12,9 @@ setup(
         "transformers[torch] @ git+https://github.com/FoamoftheSea/transformers.git@multiformer",
         "evaluate==0.4.0",
         "shift_dev @ git+https://github.com/FoamoftheSea/shift-dev.git@bbox-loading",
-        "torchmetrics==1.2.0"
+        "torchmetrics==1.2.0",
+        "jupyterlab",
+        "ipywidgets",
     ],
     extras_require={
         "torch": [
