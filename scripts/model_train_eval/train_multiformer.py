@@ -205,7 +205,9 @@ def main(args):
             id2label=id2label_boxes2d,
             num_queries=300,
             det2d_input_feature_levels=[0, 1, 2, 3],
-            det2d_extra_feature_levels=0,
+            det2d_input_proj_kernels=[2, 1, 1, 1],
+            det2d_input_proj_strides=[2, 1, 1, 1],
+            det2d_extra_feature_levels=1,
         )
     # model_config = MultiformerConfig.from_pretrained(
     #     args.checkpoint,
