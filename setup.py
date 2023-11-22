@@ -8,6 +8,9 @@ setup(
     python_requires=">=3.8",
     dependency_links=["https://download.pytorch.org/whl/cu117"],
     install_requires=[
+        "torch==2.0.1+cu117",
+        "torchaudio==2.0.2+cu117",
+        "torchvision==0.15.2+cu117",
         "wandb==0.15.8",
         "transformers[torch] @ git+https://github.com/FoamoftheSea/transformers.git@multiformer-dev",
         "evaluate==0.4.0",
@@ -16,11 +19,4 @@ setup(
         "jupyterlab",
         "ipywidgets",
     ],
-    extras_require={
-        "torch": [
-            "torch==2.0.1+cu117",
-            "torchaudio==2.0.2+cu117",
-            "torchvision==0.15.2+cu117",
-        ]
-    }
 )
