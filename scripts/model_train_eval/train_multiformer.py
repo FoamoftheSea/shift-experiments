@@ -284,6 +284,7 @@ def main(args):
         dataloader_pin_memory=False if args.workers > 0 else True,
         include_inputs_for_metrics=True,
         use_cpu=args.cpu,
+        gradient_checkpointing=args.gradient_checkpointing,
         # metric_for_best_model="eval_map",
     )
 
@@ -318,6 +319,7 @@ if __name__ == "__main__":
     parser.add_argument("-bs", "--batch-size", type=int, default=1, help="Train batch size.")
     parser.add_argument("-ebs", "--eval-batch-size", type=int, default=None, help="Eval batch size. Defaults to train batch size.")
     parser.add_argument("-gas", "--gradient-accumulation-steps", type=int, default=8, help="Number of gradient accumulation steps.")
+    parser.add_argument("-gc", "--gradient-checkpointing", action="store_true", default=False, help="Train with gradient checkpointing for reduced memory footprint.")
     parser.add_argument("-es", "--eval-steps", type=int, default=1000, help="Number of steps between validation runs.")
     parser.add_argument("-ss", "--save-steps", type=int, default=None, help="Number of steps between checkpoints. Defaults to eval steps.")
     parser.add_argument("-ms", "--max-steps", type=int, default=-1, help="Set to limit the number of total training steps.")
