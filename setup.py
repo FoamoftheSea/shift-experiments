@@ -12,9 +12,11 @@ setup(
         "torchaudio==2.0.2+cu117",
         "torchvision==0.15.2+cu117",
         "wandb==0.15.8",
-        "transformers[torch] @ git+https://github.com/FoamoftheSea/transformers.git@multiformer",
+        "transformers[torch] @ git+https://github.com/FoamoftheSea/transformers.git@multiformer-dev",
         "evaluate==0.4.0",
         "shift_dev @ git+https://github.com/FoamoftheSea/shift-dev.git@bbox-loading",
-        "torchmetrics==1.2.0"
+        "torchmetrics==1.2.0",
+        "jupyterlab",
+        "ipywidgets",
     ],
 )

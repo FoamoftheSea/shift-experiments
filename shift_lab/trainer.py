@@ -94,6 +94,17 @@ else:
     IS_SAGEMAKER_MP_POST_1_10 = False
 
 
+def denest_and_itemize(d):
+    out = {}
+    for k, v in d.items():
+        if isinstance(v, (torch.Tensor, np.ndarray)):
+            out[k] = v.item()
+        elif isinstance(v, dict):
+            for k2, v2 in denest_and_itemize(v).items():
+                out[".".join([str(k), str(k2)])] = v2
+    return out
+
+
 class MultitaskTrainer(Trainer):
 
     def __init__(
@@ -1055,7 +1066,7 @@ class MultitaskTrainer(Trainer):
             if is_torch_tpu_available():
                 xm.mark_step()
 
-            logs: Dict[str, float] = {}
+            logs: Dict[str, dict[str, Union[dict, float]]] = {}
 
             # all_gather + mean() to get average loss over all processes
             tr_loss_scalar = {train_task: self._nested_gather(trl).mean().item() for train_task, trl in tr_loss.items()}
@@ -1073,9 +1084,15 @@ class MultitaskTrainer(Trainer):
 
             if outputs is not None:
                 if hasattr(outputs, "loss_dict"):
-                    logs["loss"]["train_loss_dict"] = {k: v.item() for k, v in outputs.loss_dict.items()}
+                    logs["loss"]["train_loss_dict"] = denest_and_itemize(outputs.loss_dict)
 
-            self._total_loss_scalar += round(sum([tr_loss_scalar[train_task] * self.loss_lambdas[train_task].cpu().numpy()]), 4)
+            self._total_loss_scalar += round(
+                sum(
+                    [tr_loss[train_task].item() * self.loss_lambdas[train_task].cpu().numpy() for train_task in
+                     self.training_tasks]
+                ),
+                4
+            )
             self._globalstep_last_logged = self.state.global_step
             self.store_flos()
 

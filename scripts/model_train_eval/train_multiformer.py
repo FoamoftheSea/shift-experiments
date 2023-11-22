@@ -10,7 +10,7 @@ from shift_dev.dataloader.image_processors import MultitaskImageProcessor
 from shift_lab.trainer import MultitaskTrainer
 from shift_lab.ontologies.semantic_segmentation.shift_labels import id2label as shift_id2label
 from shift_dev.types import Keys
-from shift_dev.utils.backend import FileBackend
+from shift_dev.utils.backend import FileBackend, ZipBackend
 from torchvision.transforms import v2
 
 from transformers.data.data_collator import InputDataClass
@@ -63,14 +63,13 @@ if DO_REDUCE_LABELS and 0 in id2label.keys():
 logger = logging.get_logger(__name__)
 logger.setLevel(logging.DEBUG)
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
 # AutoBackbone.register(PvtV2Config, PvtV2Model)
 
 TRAIN_FULL_RES = True
 EVAL_FULL_RES = True
 DO_REDUCE_LABELS = True
 PRETRAINED_MODEL_NAME = "nvidia/mit-b0"
+DET2D_BOX_KEEP_PROB = 0.35
 TRAIN_IMAGE_SIZE = {"height": 800, "width": 1280}
 CLASS_ID_REMAP = None
 IMAGE_TRANSFORMS = [
@@ -78,7 +77,7 @@ IMAGE_TRANSFORMS = [
 ]
 FRAME_TRANSFORMS = []
 
-mean_ap_metric = MultiformerMetric(id2label=id2label)
+mean_ap_metric = MultiformerMetric(id2label=id2label, box_score_threshold=DET2D_BOX_KEEP_PROB)
 
 
 def compute_metrics(
@@ -156,7 +155,7 @@ def main(args):
         keys_to_load=keys_to_load,
         views_to_load=["front"],  # SHIFTDataset.VIEWS.remove("center"),
         shift_type="discrete",          # also supports "continuous/1x", "continuous/10x", "continuous/100x"
-        backend=FileBackend(),           # also supports HDF5Backend(), FileBackend()
+        backend=ZipBackend() if args.load_zip else FileBackend(),           # also supports HDF5Backend(), FileBackend()
         verbose=True,
         image_transforms=IMAGE_TRANSFORMS,
         frame_transforms=FRAME_TRANSFORMS,
@@ -171,7 +170,7 @@ def main(args):
         keys_to_load=keys_to_load,
         views_to_load=["front"],  # SHIFTDataset.VIEWS.remove("center"),
         shift_type="discrete",
-        backend=FileBackend(),
+        backend=ZipBackend() if args.load_zip else FileBackend(),
         verbose=True,
         image_processor=image_processor_val,
         load_full_res=EVAL_FULL_RES,
@@ -204,8 +203,11 @@ def main(args):
             decoder_ffn_dim=256,
             id2label=id2label_boxes2d,
             num_queries=300,
-            det2d_input_feature_levels=[1, 2, 3],
+            det2d_input_feature_levels=[0, 1, 2, 3],
+            det2d_input_proj_kernels=[2, 1, 1, 1],
+            det2d_input_proj_strides=[2, 1, 1, 1],
             det2d_extra_feature_levels=1,
+            det2d_box_keep_prob=DET2D_BOX_KEEP_PROB,
         )
     # model_config = MultiformerConfig.from_pretrained(
     #     args.checkpoint,
@@ -221,14 +223,12 @@ def main(args):
         )
     else:
         model = Multiformer(config=model_config)
+        # model.load_state_dict(torch.load("C:/Users/Nate/shift-experiments/multiformer_pretrained_weights.bin"))
 
     if args.use_adam8bit:
         import bitsandbytes as bnb
         optimizer = bnb.optim.Adam8bit(
             params=[
-                {"params": model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.depth_head.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.semantic_head.parameters(), "lr": args.learning_rate / 5},
                 {"params": model.bbox_embed.parameters()},
                 {"params": model.class_embed.parameters()},
                 {"params": model.model.encoder.parameters()},
@@ -237,6 +237,9 @@ def main(args):
                 {"params": model.model.level_embed},
                 {"params": model.model.query_position_embeddings.parameters()},
                 {"params": model.model.reference_points.parameters()},
+                {"params": model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
+                {"params": model.depth_head.parameters(), "lr": args.learning_rate / 5},
+                {"params": model.semantic_head.parameters(), "lr": args.learning_rate / 5},
                 {"params": model.model.backbone.parameters(), "lr": args.learning_rate / 10},
             ],
             lr=args.learning_rate,
@@ -278,15 +281,15 @@ def main(args):
         seed=args.seed,
         max_steps=args.max_steps,
         tf32=args.use_tf32,
-        # optim=OptimizerNames.ADAMW_8BIT if args.use_adam8bit else OptimizerNames.ADAMW_TORCH,
         dataloader_pin_memory=False if args.workers > 0 else True,
         include_inputs_for_metrics=True,
-        # metric_for_best_model="eval_map"
+        use_cpu=args.cpu,
+        # metric_for_best_model="eval_map",
     )
 
     # Set loss weights to the device where loss is calculated
     if CLASS_LOSS_WEIGHTS is not None:
-        model.class_loss_weights = torch.tensor(CLASS_LOSS_WEIGHTS).to(device)
+        model.class_loss_weights = torch.tensor(CLASS_LOSS_WEIGHTS).to(args.device)
 
     trainer = MultitaskTrainer(
         loss_lambdas={"det_2d": 1.0, "semseg": 5.0, "depth": 1.0},
@@ -303,7 +306,7 @@ def main(args):
     if args.eval_only:
         trainer.evaluate()
     else:
-        trainer.train(resume_from_checkpoint=args.checkpoint)
+        trainer.train(resume_from_checkpoint=args.checkpoint if args.trainer_resume else None)
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -328,12 +331,20 @@ if __name__ == "__main__":
     parser.add_argument("-semseg", "--semseg", action="store_true", default=False, help="Train semesg head.")
     parser.add_argument("-depth", "--depth", action="store_true", default=False, help="Train depth head.")
     parser.add_argument("-stl", "--save-total-limit", type=int, default=None, help="Maximum number of checkpoints to store at once.")
+    parser.add_argument("-zip", "--load-zip", action="store_true", default=False, help="Train with zipped archives.")
+    parser.add_argument("-tr", "--trainer_resume", action="store_true", default=False, help="Whether to resume trainer state with checkpoint load.")
+    parser.add_argument("-cpu", "--cpu", action="store_true", default=False, help="Force CPU training.")
 
     args = parser.parse_args()
     if args.eval_batch_size is None:
         args.eval_batch_size = args.batch_size
     if args.save_steps is None:
         args.save_steps = args.eval_steps
+
+    if args.cpu:
+        args.device = "cpu"
+    else:
+        args.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     if args.use_tf32:
         logger.info("Using TF32 dtype.")
