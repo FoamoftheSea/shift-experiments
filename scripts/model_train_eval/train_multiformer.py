@@ -149,6 +149,13 @@ def main(args):
         # Keys.masks,
     ]
 
+    if "semseg" in args.train_tasks:
+        keys_to_load.append(Keys.segmentation_masks)
+    if "depth" in args.train_tasks:
+        keys_to_load.append(Keys.depth_maps)
+    if "det2d" in args.train_tasks:
+        keys_to_load.append(Keys.boxes2d)
+
     train_dataset = SHIFTDataset(
         data_root=args.data_root,
         split="train",
@@ -203,11 +210,13 @@ def main(args):
             decoder_ffn_dim=256,
             id2label=id2label_boxes2d,
             num_queries=300,
-            det2d_input_feature_levels=[0, 1, 2, 3],
-            det2d_input_proj_kernels=[2, 1, 1, 1],
-            det2d_input_proj_strides=[2, 1, 1, 1],
+            det2d_input_feature_levels=[1, 2, 3],
+            det2d_input_proj_kernels=[1, 1, 1],
+            det2d_input_proj_strides=[1, 1, 1],
             det2d_extra_feature_levels=1,
+            det2d_use_pos_embed=False,
             det2d_box_keep_prob=DET2D_BOX_KEEP_PROB,
+            tasks=args.train_tasks,
         )
     # model_config = MultiformerConfig.from_pretrained(
     #     args.checkpoint,
@@ -336,6 +345,7 @@ if __name__ == "__main__":
     parser.add_argument("-zip", "--load-zip", action="store_true", default=False, help="Train with zipped archives.")
     parser.add_argument("-tr", "--trainer_resume", action="store_true", default=False, help="Whether to resume trainer state with checkpoint load.")
     parser.add_argument("-cpu", "--cpu", action="store_true", default=False, help="Force CPU training.")
+    parser.add_argument("-tasks", "--train-tasks", nargs="*", type=str, default=["semseg", "depth", "det2d"], help="Tasks to train.")
 
     args = parser.parse_args()
     if args.eval_batch_size is None:
