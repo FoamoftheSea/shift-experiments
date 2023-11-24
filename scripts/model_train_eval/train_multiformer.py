@@ -214,7 +214,7 @@ def main(args):
             det2d_input_proj_kernels=[1, 1, 1],
             det2d_input_proj_strides=[1, 1, 1],
             det2d_extra_feature_levels=1,
-            det2d_use_pos_embed=False,
+            det2d_use_pos_embed=True,
             det2d_box_keep_prob=DET2D_BOX_KEEP_PROB,
             tasks=args.train_tasks,
         )
