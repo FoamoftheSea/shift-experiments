@@ -149,12 +149,16 @@ def main(args):
         # Keys.masks,
     ]
 
-    if "semseg" in args.train_tasks:
-        keys_to_load.append(Keys.segmentation_masks)
-    if "depth" in args.train_tasks:
-        keys_to_load.append(Keys.depth_maps)
+    loss_lambdas = {}
     if "det2d" in args.train_tasks:
         keys_to_load.append(Keys.boxes2d)
+        loss_lambdas["det_2d"] = 1.0
+    if "semseg" in args.train_tasks:
+        keys_to_load.append(Keys.segmentation_masks)
+        loss_lambdas["semseg"] = 5.0
+    if "depth" in args.train_tasks:
+        keys_to_load.append(Keys.depth_maps)
+        loss_lambdas["depth"] = 1.0
 
     train_dataset = SHIFTDataset(
         data_root=args.data_root,
@@ -217,6 +221,7 @@ def main(args):
             det2d_use_pos_embed=True,
             det2d_box_keep_prob=DET2D_BOX_KEEP_PROB,
             tasks=args.train_tasks,
+            frozen_batch_norm=args.freeze_batch_norms,
         )
     # model_config = MultiformerConfig.from_pretrained(
     #     args.checkpoint,
@@ -302,7 +307,7 @@ def main(args):
         model.class_loss_weights = torch.tensor(CLASS_LOSS_WEIGHTS).to(args.device)
 
     trainer = MultitaskTrainer(
-        loss_lambdas={"det_2d": 1.0, "semseg": 5.0, "depth": 1.0},
+        loss_lambdas=loss_lambdas,
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -344,6 +349,7 @@ if __name__ == "__main__":
     parser.add_argument("-tr", "--trainer_resume", action="store_true", default=False, help="Whether to resume trainer state with checkpoint load.")
     parser.add_argument("-cpu", "--cpu", action="store_true", default=False, help="Force CPU training.")
     parser.add_argument("-tasks", "--train-tasks", nargs="*", type=str, default=["semseg", "depth", "det2d"], help="Tasks to train.")
+    parser.add_argument("-fbn", "--freeze-batch-norms", action="store_true", default=False, help="Freeze batch norms in backbone.")
 
     args = parser.parse_args()
     if args.eval_batch_size is None:
