@@ -218,7 +218,7 @@ def main(args):
             det2d_input_proj_kernels=[1, 1, 1],
             det2d_input_proj_strides=[1, 1, 1],
             det2d_extra_feature_levels=1,
-            det2d_use_pos_embed=True,
+            det2d_use_pos_embed=not args.no_pos_embed,
             det2d_box_keep_prob=DET2D_BOX_KEEP_PROB,
             tasks=args.train_tasks,
             frozen_batch_norm=args.freeze_batch_norms,
@@ -350,6 +350,7 @@ if __name__ == "__main__":
     parser.add_argument("-cpu", "--cpu", action="store_true", default=False, help="Force CPU training.")
     parser.add_argument("-tasks", "--train-tasks", nargs="*", type=str, default=["semseg", "depth", "det2d"], help="Tasks to train.")
     parser.add_argument("-fbn", "--freeze-batch-norms", action="store_true", default=False, help="Freeze batch norms in backbone.")
+    parser.add_argument("-npe", "--no-pos-embed", action="store_true", default=False, help="Do not use position embedding in Deformable DETR encoder.")
 
     args = parser.parse_args()
     if args.eval_batch_size is None:
