@@ -77,20 +77,6 @@ IMAGE_TRANSFORMS = [
 ]
 FRAME_TRANSFORMS = []
 
-mean_ap_metric = MultiformerMetric(id2label=id2label, box_score_threshold=DET2D_BOX_KEEP_PROB)
-
-
-def compute_metrics(
-    tasks: List[MultiformerTask],
-    eval_pred: EvalPrediction,
-    calculate_result: bool = True
-) -> Optional[dict]:
-
-    with torch.no_grad():
-        for task in tasks:
-            mean_ap_metric.update(task, eval_pred)
-        return mean_ap_metric.compute() if calculate_result else None
-
 
 def shift_multiformer_collator(features: List[InputDataClass]) -> Dict[str, Any]:
 
@@ -131,6 +117,20 @@ def shift_multiformer_collator(features: List[InputDataClass]) -> Dict[str, Any]
 
 def main(args):
 
+    mean_ap_metric = MultiformerMetric(tasks=args.train_tasks, id2label=id2label,
+                                       box_score_threshold=DET2D_BOX_KEEP_PROB)
+
+    def compute_metrics(
+            tasks: List[MultiformerTask],
+            eval_pred: EvalPrediction,
+            calculate_result: bool = True
+    ) -> Optional[dict]:
+
+        with torch.no_grad():
+            for task in tasks:
+                mean_ap_metric.update(task, eval_pred)
+            return mean_ap_metric.compute() if calculate_result else None
+
     image_processor_train = MultitaskImageProcessor.from_pretrained(
         PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS, class_id_remap=CLASS_ID_REMAP,
     )
@@ -148,6 +148,17 @@ def main(args):
         Keys.depth_maps,
         # Keys.masks,
     ]
+
+    loss_lambdas = {}
+    if "det2d" in args.train_tasks:
+        keys_to_load.append(Keys.boxes2d)
+        loss_lambdas["det_2d"] = 1.0
+    if "semseg" in args.train_tasks:
+        keys_to_load.append(Keys.segmentation_masks)
+        loss_lambdas["semseg"] = 5.0
+    if "depth" in args.train_tasks:
+        keys_to_load.append(Keys.depth_maps)
+        loss_lambdas["depth"] = 1.0
 
     train_dataset = SHIFTDataset(
         data_root=args.data_root,
@@ -203,11 +214,14 @@ def main(args):
             decoder_ffn_dim=256,
             id2label=id2label_boxes2d,
             num_queries=300,
-            det2d_input_feature_levels=[0, 1, 2, 3],
-            det2d_input_proj_kernels=[2, 1, 1, 1],
-            det2d_input_proj_strides=[2, 1, 1, 1],
+            det2d_input_feature_levels=[1, 2, 3],
+            det2d_input_proj_kernels=[1, 1, 1],
+            det2d_input_proj_strides=[1, 1, 1],
             det2d_extra_feature_levels=1,
+            det2d_use_pos_embed=not args.no_pos_embed,
             det2d_box_keep_prob=DET2D_BOX_KEEP_PROB,
+            tasks=args.train_tasks,
+            frozen_batch_norm=args.freeze_batch_norms,
         )
     # model_config = MultiformerConfig.from_pretrained(
     #     args.checkpoint,
@@ -284,6 +298,7 @@ def main(args):
         dataloader_pin_memory=False if args.workers > 0 else True,
         include_inputs_for_metrics=True,
         use_cpu=args.cpu,
+        gradient_checkpointing=args.gradient_checkpointing,
         # metric_for_best_model="eval_map",
     )
 
@@ -292,7 +307,7 @@ def main(args):
         model.class_loss_weights = torch.tensor(CLASS_LOSS_WEIGHTS).to(args.device)
 
     trainer = MultitaskTrainer(
-        loss_lambdas={"det_2d": 1.0, "semseg": 5.0, "depth": 1.0},
+        loss_lambdas=loss_lambdas,
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -318,6 +333,7 @@ if __name__ == "__main__":
     parser.add_argument("-bs", "--batch-size", type=int, default=1, help="Train batch size.")
     parser.add_argument("-ebs", "--eval-batch-size", type=int, default=None, help="Eval batch size. Defaults to train batch size.")
     parser.add_argument("-gas", "--gradient-accumulation-steps", type=int, default=8, help="Number of gradient accumulation steps.")
+    parser.add_argument("-gc", "--gradient-checkpointing", action="store_true", default=False, help="Train with gradient checkpointing for reduced memory footprint.")
     parser.add_argument("-es", "--eval-steps", type=int, default=1000, help="Number of steps between validation runs.")
     parser.add_argument("-ss", "--save-steps", type=int, default=None, help="Number of steps between checkpoints. Defaults to eval steps.")
     parser.add_argument("-ms", "--max-steps", type=int, default=-1, help="Set to limit the number of total training steps.")
@@ -328,12 +344,13 @@ if __name__ == "__main__":
     parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Path to checpoint to resume training.")
     parser.add_argument("-rwb", "--resume-wandb", type=str, default=None, help="ID of run to resume")
     parser.add_argument("-eval", "--eval-only", action="store_true", default=False, help="Only run evaluation step.")
-    parser.add_argument("-semseg", "--semseg", action="store_true", default=False, help="Train semesg head.")
-    parser.add_argument("-depth", "--depth", action="store_true", default=False, help="Train depth head.")
     parser.add_argument("-stl", "--save-total-limit", type=int, default=None, help="Maximum number of checkpoints to store at once.")
     parser.add_argument("-zip", "--load-zip", action="store_true", default=False, help="Train with zipped archives.")
     parser.add_argument("-tr", "--trainer_resume", action="store_true", default=False, help="Whether to resume trainer state with checkpoint load.")
     parser.add_argument("-cpu", "--cpu", action="store_true", default=False, help="Force CPU training.")
+    parser.add_argument("-tasks", "--train-tasks", nargs="*", type=str, default=["semseg", "depth", "det2d"], help="Tasks to train.")
+    parser.add_argument("-fbn", "--freeze-batch-norms", action="store_true", default=False, help="Freeze batch norms in backbone.")
+    parser.add_argument("-npe", "--no-pos-embed", action="store_true", default=False, help="Do not use position embedding in Deformable DETR encoder.")
 
     args = parser.parse_args()
     if args.eval_batch_size is None:
