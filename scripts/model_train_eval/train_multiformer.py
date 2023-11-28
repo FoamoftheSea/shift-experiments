@@ -197,6 +197,9 @@ def main(args):
     #     prefix = "/mnt/c"
     # model_name_or_path = f"{prefix}/Users/Nate/transformers/ddetr_test1/pytorch_model.bin"
     model_config = MultiformerConfig(
+            tasks=args.tasks,
+            train_tasks=args.train_tasks,
+            train_backbone=False,
             use_timm_backbone=False,
             backbone="pvt_v2",
             backbone_config=PvtV2Config(
@@ -220,7 +223,8 @@ def main(args):
             det2d_extra_feature_levels=1,
             det2d_use_pos_embed=not args.no_pos_embed,
             det2d_box_keep_prob=DET2D_BOX_KEEP_PROB,
-            tasks=args.train_tasks,
+            det2d_fuse_semantic=True,
+            det2d_fuse_depth=True,
             frozen_batch_norm=args.freeze_batch_norms,
         )
     # model_config = MultiformerConfig.from_pretrained(
@@ -251,9 +255,9 @@ def main(args):
                 {"params": model.model.level_embed},
                 {"params": model.model.query_position_embeddings.parameters()},
                 {"params": model.model.reference_points.parameters()},
-                {"params": model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.depth_head.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.semantic_head.parameters(), "lr": args.learning_rate / 5},
+                {"params": model.model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
+                {"params": model.model.depth_head.parameters(), "lr": args.learning_rate / 5},
+                {"params": model.model.semantic_head.parameters(), "lr": args.learning_rate / 5},
                 {"params": model.model.backbone.parameters(), "lr": args.learning_rate / 10},
             ],
             lr=args.learning_rate,
@@ -269,9 +273,9 @@ def main(args):
                 {"params": model.model.level_embed},
                 {"params": model.model.query_position_embeddings.parameters()},
                 {"params": model.model.reference_points.parameters()},
-                {"params": model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.depth_head.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.semantic_head.parameters(), "lr": args.learning_rate / 5},
+                {"params": model.model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
+                {"params": model.model.depth_head.parameters(), "lr": args.learning_rate / 5},
+                {"params": model.model.semantic_head.parameters(), "lr": args.learning_rate / 5},
                 {"params": model.model.backbone.parameters(), "lr": args.learning_rate / 10},
             ],
             lr=args.learning_rate,
@@ -348,7 +352,8 @@ if __name__ == "__main__":
     parser.add_argument("-zip", "--load-zip", action="store_true", default=False, help="Train with zipped archives.")
     parser.add_argument("-tr", "--trainer_resume", action="store_true", default=False, help="Whether to resume trainer state with checkpoint load.")
     parser.add_argument("-cpu", "--cpu", action="store_true", default=False, help="Force CPU training.")
-    parser.add_argument("-tasks", "--train-tasks", nargs="*", type=str, default=["semseg", "depth", "det2d"], help="Tasks to train.")
+    parser.add_argument("-tt", "--train-tasks", nargs="*", type=str, default=["semseg", "depth", "det2d"], help="Tasks to train.")
+    parser.add_argument("-t", "--tasks", nargs="*", type=str, default=["semseg", "depth", "det2d"], help="Tasks to infer.")
     parser.add_argument("-fbn", "--freeze-batch-norms", action="store_true", default=False, help="Freeze batch norms in backbone.")
     parser.add_argument("-npe", "--no-pos-embed", action="store_true", default=False, help="Do not use position embedding in Deformable DETR encoder.")
 
