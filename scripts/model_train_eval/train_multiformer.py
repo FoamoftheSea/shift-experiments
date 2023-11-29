@@ -199,7 +199,7 @@ def main(args):
     model_config = MultiformerConfig(
             tasks=args.tasks,
             train_tasks=args.train_tasks,
-            train_backbone=False,
+            train_backbone=not args.freeze_backbone,
             use_timm_backbone=False,
             backbone="pvt_v2",
             backbone_config=PvtV2Config(
@@ -355,6 +355,7 @@ if __name__ == "__main__":
     parser.add_argument("-tt", "--train-tasks", nargs="*", type=str, default=["semseg", "depth", "det2d"], help="Tasks to train.")
     parser.add_argument("-t", "--tasks", nargs="*", type=str, default=["semseg", "depth", "det2d"], help="Tasks to infer.")
     parser.add_argument("-fbn", "--freeze-batch-norms", action="store_true", default=False, help="Freeze batch norms in backbone.")
+    parser.add_argument("-fbb", "--freeze-backbone", action="store_true", default=False, help="Freeze weights in backbone.")
     parser.add_argument("-npe", "--no-pos-embed", action="store_true", default=False, help="Do not use position embedding in Deformable DETR encoder.")
 
     args = parser.parse_args()
