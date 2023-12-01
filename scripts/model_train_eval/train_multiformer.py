@@ -1,4 +1,3 @@
-import sys
 from argparse import ArgumentParser
 from typing import Optional, List, Dict, Any, Mapping
 
@@ -7,6 +6,7 @@ import torch
 import wandb
 from shift_dev import SHIFTDataset
 from shift_dev.dataloader.image_processors import MultitaskImageProcessor
+from shift_lab.ontologies.det_3d.utils import SHIFT_BOX3D_SIZE_MEANS
 from shift_lab.trainer import MultitaskTrainer
 from shift_lab.ontologies.semantic_segmentation.shift_labels import id2label as shift_id2label
 from shift_dev.types import Keys
@@ -17,14 +17,8 @@ from transformers.data.data_collator import InputDataClass
 from transformers.models.multiformer.configuration_multiformer import MultiformerConfig
 from transformers.models.multiformer.metrics_multiformer import MultiformerMetric
 from transformers.models.multiformer.modeling_multiformer import MultiformerTask, Multiformer
-from transformers.training_args import OptimizerNames
 from transformers.utils import logging
-from transformers import (
-    PvtV2Config,
-    PvtV2Model,
-    AutoBackbone,
-    TrainingArguments, EvalPrediction,
-)
+from transformers import PvtV2Config, TrainingArguments, EvalPrediction
 
 DO_REDUCE_LABELS = True
 EVAL_IGNORE_IDS = {k for k, v in shift_id2label.items() if v.ignoreInEval}
@@ -102,7 +96,7 @@ def shift_multiformer_collator(features: List[InputDataClass]) -> Dict[str, Any]
     # Handling of all other possible keys.
     # Again, we will use the first element to figure out which key/values are not None for this model.
     for k, v in first.items():
-        if k == "labels":
+        if k == "labels" or k == "labels_3d":
             batch[k] = [f[k] for f in features]
         elif k not in ("label", "label_ids") and v is not None and not isinstance(v, str):
             if isinstance(v, torch.Tensor):
@@ -144,21 +138,27 @@ def main(args):
         Keys.images,  # images, shape (1, 3, H, W), uint8 (RGB)
         Keys.intrinsics,  # camera intrinsics, shape (3, 3)
         Keys.boxes2d,
-        Keys.segmentation_masks,
-        Keys.depth_maps,
-        # Keys.masks,
     ]
 
     loss_lambdas = {}
-    if "det2d" in args.train_tasks:
+    if "det2d" in args.tasks + args.train_tasks:
         keys_to_load.append(Keys.boxes2d)
-        loss_lambdas["det_2d"] = 1.0
-    if "semseg" in args.train_tasks:
+        if "det2d" in args.train_tasks:
+            loss_lambdas["det_2d"] = 1.0
+    if "semseg" in args.tasks + args.train_tasks:
         keys_to_load.append(Keys.segmentation_masks)
-        loss_lambdas["semseg"] = 5.0
-    if "depth" in args.train_tasks:
+        if "semseg" in args.train_tasks:
+            loss_lambdas["semseg"] = 5.0
+    if "depth" in args.tasks + args.train_tasks:
         keys_to_load.append(Keys.depth_maps)
-        loss_lambdas["depth"] = 1.0
+        if "depth" in args.train_tasks:
+            loss_lambdas["depth"] = 1.0
+    if "det3d" in args.tasks + args.train_tasks:
+        keys_to_load.append(Keys.boxes3d)
+        if "det3d" in args.train_tasks:
+            loss_lambdas["det_3d"] = 1.0
+    # if "panseg" in args.tasks + args.train_tasks:
+    #     keys_to_load.append(Keys.masks)
 
     train_dataset = SHIFTDataset(
         data_root=args.data_root,
@@ -225,6 +225,7 @@ def main(args):
             det2d_box_keep_prob=DET2D_BOX_KEEP_PROB,
             det2d_fuse_semantic=True,
             det2d_fuse_depth=True,
+            det3d_type_mean_sizes=SHIFT_BOX3D_SIZE_MEANS,
             frozen_batch_norm=args.freeze_batch_norms,
         )
     # model_config = MultiformerConfig.from_pretrained(
@@ -352,10 +353,10 @@ if __name__ == "__main__":
     parser.add_argument("-zip", "--load-zip", action="store_true", default=False, help="Train with zipped archives.")
     parser.add_argument("-tr", "--trainer_resume", action="store_true", default=False, help="Whether to resume trainer state with checkpoint load.")
     parser.add_argument("-cpu", "--cpu", action="store_true", default=False, help="Force CPU training.")
-    parser.add_argument("-tt", "--train-tasks", nargs="*", type=str, default=["semseg", "depth", "det2d"], help="Tasks to train.")
-    parser.add_argument("-t", "--tasks", nargs="*", type=str, default=["semseg", "depth", "det2d"], help="Tasks to infer.")
+    parser.add_argument("-tt", "--train-tasks", nargs="*", type=str, default=["semseg", "depth", "det2d", "det3d"], help="Tasks to train.")
+    parser.add_argument("-t", "--tasks", nargs="*", type=str, default=["semseg", "depth", "det2d", "det3d"], help="Tasks to infer.")
     parser.add_argument("-fbn", "--freeze-batch-norms", action="store_true", default=False, help="Freeze batch norms in backbone.")
-    parser.add_argument("-fbb", "--freeze-backbone", action="store_true", default=False, help="Freeze weights in backbone.")
+    parser.add_argument("-fb", "--freeze-backbone", action="store_true", default=False, help="Freeze weights in backbone.")
     parser.add_argument("-npe", "--no-pos-embed", action="store_true", default=False, help="Do not use position embedding in Deformable DETR encoder.")
 
     args = parser.parse_args()
