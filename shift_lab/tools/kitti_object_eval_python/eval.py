@@ -4,7 +4,7 @@ import io as sysio
 from shift_lab.tools.kitti_object_eval_python.rotate_iou import rotate_iou_gpu_eval
 
 
-@numba.jit
+@numba.jit(nopython=False)
 def get_thresholds(scores: np.ndarray, num_gt, num_sample_pts=41):
     scores.sort()
     scores = scores[::-1]
@@ -26,10 +26,11 @@ def get_thresholds(scores: np.ndarray, num_gt, num_sample_pts=41):
 
 
 def clean_data(gt_anno, dt_anno, current_class, difficulty):
-    CLASS_NAMES = ['car', 'pedestrian', 'cyclist']
-    MIN_HEIGHT = [40, 25, 25]
-    MAX_OCCLUSION = [0, 1, 2]
-    MAX_TRUNCATION = [0.15, 0.3, 0.5]
+    # CLASS_NAMES = ['car', 'pedestrian', 'cyclist']
+    CLASS_NAMES = ['pedestrian', 'car', 'truck', 'bus', 'motorcycle', 'bicycle']
+    MIN_HEIGHT = [40, 25, 15]
+    # MAX_OCCLUSION = [0, 1, 2]
+    # MAX_TRUNCATION = [0.15, 0.3, 0.5]
     dc_bboxes, ignored_gt, ignored_dt = [], [], []
     current_cls_name = CLASS_NAMES[current_class].lower()
     num_gt = len(gt_anno["name"])
@@ -39,7 +40,6 @@ def clean_data(gt_anno, dt_anno, current_class, difficulty):
         bbox = gt_anno["bbox"][i]
         gt_name = gt_anno["name"][i].lower()
         height = bbox[3] - bbox[1]
-        valid_class = -1
         if (gt_name == current_cls_name):
             valid_class = 1
         elif (current_cls_name == "Pedestrian".lower()
@@ -50,23 +50,23 @@ def clean_data(gt_anno, dt_anno, current_class, difficulty):
         else:
             valid_class = -1
         ignore = False
-        if ((gt_anno["occluded"][i] > MAX_OCCLUSION[difficulty])
-                or (gt_anno["truncated"][i] > MAX_TRUNCATION[difficulty])
-                or (height <= MIN_HEIGHT[difficulty])):
+        # if ((gt_anno["occluded"][i] > MAX_OCCLUSION[difficulty])
+        #         or (gt_anno["truncated"][i] > MAX_TRUNCATION[difficulty])
+        #         or (height <= MIN_HEIGHT[difficulty])):
             # if gt_anno["difficulty"][i] > difficulty or gt_anno["difficulty"][i] == -1:
+        if height <= MIN_HEIGHT[difficulty]:
             ignore = True
         if valid_class == 1 and not ignore:
             ignored_gt.append(0)
             num_valid_gt += 1
-        elif (valid_class == 0 or (ignore and (valid_class == 1))):
+        elif valid_class == 0 or (ignore and (valid_class == 1)):
             ignored_gt.append(1)
         else:
             ignored_gt.append(-1)
-    # for i in range(num_gt):
         if gt_anno["name"][i] == "DontCare":
             dc_bboxes.append(gt_anno["bbox"][i])
     for i in range(num_dt):
-        if (dt_anno["name"][i].lower() == current_cls_name):
+        if dt_anno["name"][i].lower() == current_cls_name:
             valid_class = 1
         else:
             valid_class = -1
@@ -168,10 +168,14 @@ def compute_statistics_jit(overlaps,
     det_size = dt_datas.shape[0]
     gt_size = gt_datas.shape[0]
     dt_scores = dt_datas[:, -1]
-    dt_alphas = dt_datas[:, 4]
-    gt_alphas = gt_datas[:, 4]
     dt_bboxes = dt_datas[:, :4]
     gt_bboxes = gt_datas[:, :4]
+    if compute_aos:
+        dt_alphas = dt_datas[:, 4]
+        gt_alphas = gt_datas[:, 4]
+    else:
+        dt_alphas = None
+        gt_alphas = None
 
     assigned_detection = [False] * det_size
     ignored_threshold = [False] * det_size
@@ -202,7 +206,7 @@ def compute_statistics_jit(overlaps,
                 continue
             if (ignored_threshold[j]):
                 continue
-            overlap = overlaps[j, i]
+            overlap = overlaps[i, j]
             dt_score = dt_scores[j]
             if (not compute_fp and (overlap > min_overlap)
                     and dt_score > valid_detection):
@@ -384,8 +388,7 @@ def calculate_iou_partly(gt_annos, dt_annos, metric, num_parts=50):
             rots = np.concatenate([a["rotation_y"] for a in dt_annos_part], 0)
             dt_boxes = np.concatenate(
                 [loc, dims, rots[..., np.newaxis]], axis=1)
-            overlap_part = d3_box_overlap(gt_boxes, dt_boxes).astype(
-                np.float64)
+            overlap_part = d3_box_overlap(gt_boxes, dt_boxes).astype(np.float64)
         else:
             raise ValueError("unknown metric")
         parted_overlaps.append(overlap_part)
@@ -427,12 +430,13 @@ def _prepare_data(gt_annos, dt_annos, current_class, difficulty):
         total_dc_num.append(dc_bboxes.shape[0])
         dontcares.append(dc_bboxes)
         total_num_valid_gt += num_valid_gt
-        gt_datas = np.concatenate(
-            [gt_annos[i]["bbox"], gt_annos[i]["alpha"][..., np.newaxis]], 1)
-        dt_datas = np.concatenate([
-            dt_annos[i]["bbox"], dt_annos[i]["alpha"][..., np.newaxis],
-            dt_annos[i]["score"][..., np.newaxis]
-        ], 1)
+        gt_datas = gt_annos[i]["bbox"]
+        if hasattr(gt_annos[i], "alpha"):
+            gt_datas = np.concatenate([gt_datas, gt_annos[i]["alpha"][..., np.newaxis]], 1)
+        dt_datas = dt_annos[i]["bbox"]
+        if hasattr(dt_annos[i], "alpha"):
+            dt_datas = np.concatenate([dt_datas, dt_annos[i]["alpha"][..., np.newaxis]], 1)
+        dt_datas = np.concatenate([dt_datas, dt_annos[i]["score"][..., np.newaxis]], 1)
         gt_datas_list.append(gt_datas)
         dt_datas_list.append(dt_datas)
     total_dc_num = np.stack(total_dc_num, axis=0)
@@ -464,8 +468,9 @@ def eval_class(gt_annos,
     assert len(gt_annos) == len(dt_annos)
     num_examples = len(gt_annos)
     split_parts = get_split_parts(num_examples, num_parts)
+    eps = 1e-6
 
-    rets = calculate_iou_partly(dt_annos, gt_annos, metric, num_parts)
+    rets = calculate_iou_partly(gt_annos, dt_annos, metric, num_parts)
     overlaps, parted_overlaps, total_dt_num, total_gt_num = rets
     N_SAMPLE_PTS = 41
     num_minoverlap = len(min_overlaps)
@@ -530,10 +535,10 @@ def eval_class(gt_annos,
                         compute_aos=compute_aos)
                     idx += num_part
                 for i in range(len(thresholds)):
-                    recall[m, l, k, i] = pr[i, 0] / (pr[i, 0] + pr[i, 2])
-                    precision[m, l, k, i] = pr[i, 0] / (pr[i, 0] + pr[i, 1])
+                    recall[m, l, k, i] = pr[i, 0] / (pr[i, 0] + pr[i, 2] + eps)
+                    precision[m, l, k, i] = pr[i, 0] / (pr[i, 0] + pr[i, 1] + eps)
                     if compute_aos:
-                        aos[m, l, k, i] = pr[i, 3] / (pr[i, 0] + pr[i, 1])
+                        aos[m, l, k, i] = pr[i, 3] / (pr[i, 0] + pr[i, 1] + eps)
                 for i in range(len(thresholds)):
                     precision[m, l, k, i] = np.max(
                         precision[m, l, k, i:], axis=-1)
@@ -593,7 +598,8 @@ def do_coco_style_eval(gt_annos, dt_annos, current_classes, overlap_ranges,
     min_overlaps = np.zeros([10, *overlap_ranges.shape[1:]])
     for i in range(overlap_ranges.shape[1]):
         for j in range(overlap_ranges.shape[2]):
-            min_overlaps[:, i, j] = np.linspace(*overlap_ranges[:, i, j])
+            start, stop, step = overlap_ranges[:, i, j]
+            min_overlaps[:, i, j] = np.linspace(start, stop, int(step))
     mAP_bbox, mAP_bev, mAP_3d, mAP_aos = do_eval(
         gt_annos, dt_annos, current_classes, min_overlaps, compute_aos)
     # ret: [num_class, num_diff, num_minoverlap]
@@ -762,13 +768,13 @@ def get_shift_coco_eval_result(gt_annos, dt_annos, current_classes):
     current_classes = current_classes_int
     overlap_ranges = np.zeros([3, 3, len(current_classes)])
     for i, curcls in enumerate(current_classes):
-        overlap_ranges[:, :, i] = np.array(
-            class_to_range[curcls])[:, np.newaxis]
+        overlap_ranges[:, :, i] = np.array(class_to_range[curcls])[:, np.newaxis]
+
     result = ''
     # check whether alpha is valid
     compute_aos = False
     for anno in dt_annos:
-        if anno['alpha'].shape[0] != 0:
+        if hasattr(anno, "alpha") and anno["alpha"].shape[0] != 0:
             if anno['alpha'][0] != -10:
                 compute_aos = True
             break
@@ -794,4 +800,13 @@ def get_shift_coco_eval_result(gt_annos, dt_annos, current_classes):
             result += print_str((f"aos  AP:{mAPaos[j, 0]:.2f}, "
                                  f"{mAPaos[j, 1]:.2f}, "
                                  f"{mAPaos[j, 2]:.2f}"))
-    return result
+
+    metric_names = ["mAP_bev", "mAP_3d", "mAP_2d"]
+    metrics = [mAPbev, mAP3d, mAPbbox]
+    log_dict = {}
+    for metric_name, metric in zip(metric_names, metrics):
+        for j, class_label in class_to_name.items():
+            for i, difficulty in enumerate(["easy", "medium", "hard"]):
+                log_dict[f"{metric_name}.{class_label}.{difficulty}"] = metric[j, i]
+
+    return result, log_dict
