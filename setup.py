@@ -18,5 +18,6 @@ setup(
         "torchmetrics==1.2.0",
         "jupyterlab",
         "ipywidgets",
+        "numba==0.58.0"
     ],
 )

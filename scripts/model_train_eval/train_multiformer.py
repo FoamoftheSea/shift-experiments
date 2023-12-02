@@ -111,20 +111,6 @@ def shift_multiformer_collator(features: List[InputDataClass]) -> Dict[str, Any]
 
 def main(args):
 
-    mean_ap_metric = MultiformerMetric(tasks=args.train_tasks, id2label=id2label,
-                                       box_score_threshold=DET2D_BOX_KEEP_PROB)
-
-    def compute_metrics(
-            tasks: List[MultiformerTask],
-            eval_pred: EvalPrediction,
-            calculate_result: bool = True
-    ) -> Optional[dict]:
-
-        with torch.no_grad():
-            for task in tasks:
-                mean_ap_metric.update(task, eval_pred)
-            return mean_ap_metric.compute() if calculate_result else None
-
     image_processor_train = MultitaskImageProcessor.from_pretrained(
         PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS, class_id_remap=CLASS_ID_REMAP,
     )
@@ -310,6 +296,24 @@ def main(args):
     # Set loss weights to the device where loss is calculated
     if CLASS_LOSS_WEIGHTS is not None:
         model.class_loss_weights = torch.tensor(CLASS_LOSS_WEIGHTS).to(args.device)
+
+    multiformer_metric = MultiformerMetric(
+        config=model_config,
+        id2label=id2label,
+        box_score_threshold=DET2D_BOX_KEEP_PROB
+    )
+
+    def compute_metrics(
+            tasks: List[MultiformerTask],
+            eval_pred: EvalPrediction,
+            calculate_result: bool = True
+    ) -> Optional[dict]:
+
+        with torch.no_grad():
+            for task in tasks:
+                multiformer_metric.update(task, eval_pred)
+            return multiformer_metric.compute() if calculate_result else None
+
 
     trainer = MultitaskTrainer(
         loss_lambdas=loss_lambdas,
