@@ -21,6 +21,7 @@ from packaging import version
 from torch import nn
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 
+from transformers import Trainer
 from transformers.data.data_collator import DataCollator
 from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
 from transformers.integrations.deepspeed import deepspeed_init, deepspeed_load_checkpoint, is_deepspeed_available
@@ -51,7 +52,7 @@ from transformers.trainer_utils import (
     has_length,
     speed_metrics,
 )
-from transformers.training_args import ParallelMode, TrainingArguments, Trainer
+from transformers.training_args import ParallelMode, TrainingArguments
 from transformers.utils import (
     is_accelerate_available,
     is_apex_available,

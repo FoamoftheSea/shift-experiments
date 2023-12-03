@@ -268,7 +268,9 @@ def main(args):
             ],
             lr=args.learning_rate,
         )
-    lr_sceduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=len(train_dataset))
+    lr_sceduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=len(train_dataset) / args.gradient_accumulation_steps * args.epochs
+    )
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         learning_rate=args.learning_rate,
@@ -291,6 +293,7 @@ def main(args):
         include_inputs_for_metrics=True,
         use_cpu=args.cpu,
         gradient_checkpointing=args.gradient_checkpointing,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         # metric_for_best_model="eval_map",
     )
 
