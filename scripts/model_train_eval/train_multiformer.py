@@ -127,22 +127,22 @@ def main(args):
     ]
 
     loss_lambdas = {}
-    if "det2d" in args.tasks + args.train_tasks:
+    if MultiformerTask.DET_2D in args.tasks + args.train_tasks:
         keys_to_load.append(Keys.boxes2d)
-        if "det2d" in args.train_tasks:
-            loss_lambdas["det_2d"] = 1.0
-    if "semseg" in args.tasks + args.train_tasks:
+        if MultiformerTask.DET_2D in args.train_tasks:
+            loss_lambdas[MultiformerTask.DET_2D] = 1.0
+    if MultiformerTask.SEMSEG in args.tasks + args.train_tasks:
         keys_to_load.append(Keys.segmentation_masks)
-        if "semseg" in args.train_tasks:
-            loss_lambdas["semseg"] = 5.0
-    if "depth" in args.tasks + args.train_tasks:
+        if MultiformerTask.SEMSEG in args.train_tasks:
+            loss_lambdas[MultiformerTask.SEMSEG] = 5.0
+    if MultiformerTask.DEPTH in args.tasks + args.train_tasks:
         keys_to_load.append(Keys.depth_maps)
-        if "depth" in args.train_tasks:
-            loss_lambdas["depth"] = 1.0
-    if "det3d" in args.tasks + args.train_tasks:
+        if MultiformerTask.DEPTH in args.train_tasks:
+            loss_lambdas[MultiformerTask.DEPTH] = 2.0
+    if MultiformerTask.DET_3D in args.tasks + args.train_tasks:
         keys_to_load.append(Keys.boxes3d)
-        if "det3d" in args.train_tasks:
-            loss_lambdas["det_3d"] = 1.0
+        if MultiformerTask.DET_3D in args.train_tasks:
+            loss_lambdas[MultiformerTask.DET_3D] = 0.1
     # if "panseg" in args.tasks + args.train_tasks:
     #     keys_to_load.append(Keys.masks)
 
@@ -233,43 +233,54 @@ def main(args):
 
     if args.use_adam8bit:
         import bitsandbytes as bnb
+        params = [
+            {"params": model.bbox_embed.parameters()},
+            {"params": model.class_embed.parameters()},
+            {"params": model.model.encoder.parameters()},
+            {"params": model.model.decoder.parameters()},
+            {"params": model.model.input_proj.parameters()},
+            {"params": model.model.level_embed},
+            {"params": model.model.query_position_embeddings.parameters()},
+            {"params": model.model.reference_points.parameters()},
+            {"params": model.model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
+            {"params": model.model.depth_head.parameters(), "lr": args.learning_rate / 5},
+            {"params": model.model.semantic_head.parameters(), "lr": args.learning_rate / 5},
+        ]
+        if not args.freeze_backbone:
+            params.append({"params": model.model.backbone.parameters(), "lr": args.learning_rate / 10})
         optimizer = bnb.optim.Adam8bit(
-            params=[
-                {"params": model.bbox_embed.parameters()},
-                {"params": model.class_embed.parameters()},
-                {"params": model.model.encoder.parameters()},
-                {"params": model.model.decoder.parameters()},
-                {"params": model.model.input_proj.parameters()},
-                {"params": model.model.level_embed},
-                {"params": model.model.query_position_embeddings.parameters()},
-                {"params": model.model.reference_points.parameters()},
-                {"params": model.model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.model.depth_head.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.model.semantic_head.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.model.backbone.parameters(), "lr": args.learning_rate / 10},
-            ],
+            params=params,
             lr=args.learning_rate,
         )
     else:
+        params = [
+            {"params": model.bbox_embed.parameters()},
+            {"params": model.class_embed.parameters()},
+            {"params": model.model.encoder.parameters()},
+            {"params": model.model.decoder.parameters()},
+            {"params": model.model.input_proj.parameters()},
+            {"params": model.model.level_embed},
+            {"params": model.model.query_position_embeddings.parameters()},
+            {"params": model.model.reference_points.parameters()},
+            {"params": model.model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
+            {"params": model.model.depth_head.parameters(), "lr": args.learning_rate / 5},
+            {"params": model.model.semantic_head.parameters(), "lr": args.learning_rate / 5},
+        ]
+        if not args.freeze_backbone:
+            params.append({"params": model.model.backbone.parameters(), "lr": args.learning_rate / 10})
         optimizer = torch.optim.AdamW(
-            params=[
-                {"params": model.bbox_embed.parameters()},
-                {"params": model.class_embed.parameters()},
-                {"params": model.model.encoder.parameters()},
-                {"params": model.model.decoder.parameters()},
-                {"params": model.model.input_proj.parameters()},
-                {"params": model.model.level_embed},
-                {"params": model.model.query_position_embeddings.parameters()},
-                {"params": model.model.reference_points.parameters()},
-                {"params": model.model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.model.depth_head.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.model.semantic_head.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.model.backbone.parameters(), "lr": args.learning_rate / 10},
-            ],
+            params=params,
             lr=args.learning_rate,
         )
-    lr_sceduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=len(train_dataset) / args.gradient_accumulation_steps * args.epochs
+    # lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    #     optimizer, T_max=len(train_dataset) / args.gradient_accumulation_steps * args.epochs
+    # )
+    lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer=optimizer,
+        max_lr=args.learning_rate,
+        steps_per_epoch=len(train_dataset)//(args.gradient_accumulation_steps*args.batch_size),
+        epochs=args.epochs,
+        pct_start=0.1,
     )
     training_args = TrainingArguments(
         output_dir=args.output_dir,
@@ -321,13 +332,14 @@ def main(args):
 
     trainer = MultitaskTrainer(
         loss_lambdas=loss_lambdas,
+        eval_tasks=args.tasks,
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         compute_metrics=compute_metrics,
         data_collator=shift_multiformer_collator,
-        optimizers=(optimizer, lr_sceduler),
+        optimizers=(optimizer, lr_scheduler),
         compute_metrics_interval="batch",
     )
 
@@ -372,6 +384,17 @@ if __name__ == "__main__":
         args.eval_batch_size = args.batch_size
     if args.save_steps is None:
         args.save_steps = args.eval_steps
+
+    for attr in ["tasks", "train_tasks"]:
+        modified = []
+        for task in getattr(args, attr):
+            if task == "det2d":
+                modified.append("det_2d")
+            elif task == "det3d":
+                modified.append("det_3d")
+            else:
+                modified.append(task)
+        setattr(args, attr, modified)
 
     if args.cpu:
         args.device = "cpu"

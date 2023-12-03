@@ -157,6 +157,7 @@ class MultitaskTrainer(Trainer):
     def __init__(
         self,
         training_tasks: Optional[Set[str]] = None,
+        eval_tasks: Optional[Set[str]] = None,
         model: Union[PreTrainedModel, nn.Module] = None,
         args: TrainingArguments = None,
         data_collator: Optional[DataCollator] = None,
@@ -195,6 +196,8 @@ class MultitaskTrainer(Trainer):
         else:
             assert all([task in self.training_tasks for task in loss_lambdas.keys()]), "Invalid loss lambda passed."
             self.loss_lambdas = {task: torch.tensor(val).to(self.args.device) for task, val in loss_lambdas.items()}
+
+        self.eval_tasks = eval_tasks if eval_tasks is not None else self.training_tasks
 
     def training_step(
             self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]], return_outputs: bool = True,
@@ -389,7 +392,7 @@ class MultitaskTrainer(Trainer):
                 if self.compute_metrics is not None and preds_host is not None and labels_host is not None:
                     if args.include_inputs_for_metrics:
                         metrics = self.compute_metrics(
-                            tasks=self.training_tasks,
+                            tasks=self.eval_tasks,
                             eval_pred=EvalPrediction(
                                 predictions=nested_numpify(preds_host),
                                 label_ids=nested_numpify(labels_host),
@@ -399,7 +402,7 @@ class MultitaskTrainer(Trainer):
                         )
                     else:
                         metrics = self.compute_metrics(
-                            tasks=self.training_tasks,
+                            tasks=self.eval_tasks,
                             eval_pred=EvalPrediction(
                                 predictions=nested_numpify(preds_host),
                                 label_ids=nested_numpify(labels_host),
