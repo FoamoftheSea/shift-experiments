@@ -1,74 +1,120 @@
 from typing import Callable, Dict, List, Optional, Tuple, Union, Any, Set
 
 import math
-import numpy as np
 import os
 import shutil
 import sys
 import time
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
+# Integrations must be imported before ML frameworks:
+# isort: off
+from transformers.integrations import (
+    get_reporting_integration_callbacks,
+    hp_params,
+)
+
+import numpy as np
 import torch
 import torch.distributed as dist
 from packaging import version
 from torch import nn
 from torch.utils.data import DataLoader, Dataset, RandomSampler
-from transformers import (
-    TrainingArguments,
-    Trainer,
-    EvalPrediction,
-    is_apex_available,
-)
+
 from transformers.data.data_collator import DataCollator
 from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
-from transformers.deepspeed import deepspeed_init, deepspeed_load_checkpoint
-from transformers.integrations import hp_params, is_deepspeed_available
+from transformers.integrations.deepspeed import deepspeed_init, deepspeed_load_checkpoint, is_deepspeed_available
 from transformers.modeling_utils import PreTrainedModel
 from transformers.pytorch_utils import is_torch_less_than_1_11
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-from transformers.trainer import TRAINER_STATE_NAME
 from transformers.trainer_callback import (
+    DefaultFlowCallback,
+    ProgressCallback,
     TrainerCallback,
     TrainerState,
 )
 from transformers.trainer_pt_utils import (
     IterableDatasetShard,
     find_batch_size,
+    get_dataloader_sampler,
+    get_model_param_count,
     nested_concat,
     nested_detach,
     nested_numpify,
-    get_model_param_count,
-    get_dataloader_sampler,
 )
 from transformers.trainer_utils import (
-    HPSearchBackend,
     EvalLoopOutput,
+    EvalPrediction,
+    HPSearchBackend,
+    TrainOutput,
     denumpify_detensorize,
     has_length,
     speed_metrics,
-    TrainOutput,
 )
-from transformers.training_args import ParallelMode
-from transformers.utils import is_torch_tpu_available, logging, is_sagemaker_mp_enabled, is_peft_available, is_accelerate_available
+from transformers.training_args import ParallelMode, TrainingArguments, Trainer
+from transformers.utils import (
+    is_accelerate_available,
+    is_apex_available,
+    is_datasets_available,
+    is_in_notebook,
+    is_peft_available,
+    is_safetensors_available,
+    is_sagemaker_mp_enabled,
+    is_torch_tpu_available,
+    logging,
+)
 
-logger = logging.get_logger(__name__)
+
+DEFAULT_CALLBACKS = [DefaultFlowCallback]
+DEFAULT_PROGRESS_CALLBACK = ProgressCallback
+
+if is_in_notebook():
+    from transformers.utils.notebook import NotebookProgressCallback
+
+    DEFAULT_PROGRESS_CALLBACK = NotebookProgressCallback
 
 if is_apex_available():
     from apex import amp
 
+if is_datasets_available():
+    import datasets
+
+if is_torch_tpu_available(check_device=False):
+    import torch_xla.core.xla_model as xm
+    import torch_xla.debug.metrics as met
+
+
+if is_sagemaker_mp_enabled():
+    import smdistributed.modelparallel.torch as smp
+    from smdistributed.modelparallel import __version__ as SMP_VERSION
+
+    IS_SAGEMAKER_MP_POST_1_10 = version.parse(SMP_VERSION) >= version.parse("1.10")
+
+    from .trainer_pt_utils import smp_forward_backward, smp_forward_only, smp_gather, smp_nested_concat
+else:
+    IS_SAGEMAKER_MP_POST_1_10 = False
+
+
+if is_safetensors_available():
+    import safetensors.torch
+
+
 if is_peft_available():
     from peft import PeftModel
+
 
 if is_accelerate_available():
     from accelerate import Accelerator, skip_first_batches
     from accelerate import __version__ as accelerate_version
-    from accelerate.utils import DistributedDataParallelKwargs, GradientAccumulationPlugin
+    from accelerate.utils import (
+        DistributedDataParallelKwargs,
+        GradientAccumulationPlugin,
+        load_fsdp_model,
+        load_fsdp_optimizer,
+        save_fsdp_model,
+        save_fsdp_optimizer,
+    )
 
-    if version.parse(accelerate_version) > version.parse("0.20.3"):
-        from accelerate.utils import (
-            load_fsdp_model,
-            load_fsdp_optimizer,
-            save_fsdp_model,
-            save_fsdp_optimizer,
-        )
     DATA_SAMPLERS = [RandomSampler]
     if version.parse(accelerate_version) > version.parse("0.23.0"):
         from accelerate.data_loader import SeedableRandomSampler
@@ -79,19 +125,17 @@ if is_accelerate_available():
         from accelerate.utils import DeepSpeedSchedulerWrapper
 
 
-if is_torch_tpu_available(check_device=False):
-    import torch_xla.core.xla_model as xm
-    import torch_xla.debug.metrics as met
+logger = logging.get_logger(__name__)
 
-if is_sagemaker_mp_enabled():
-    import smdistributed.modelparallel.torch as smp
-    from smdistributed.modelparallel import __version__ as SMP_VERSION
 
-    IS_SAGEMAKER_MP_POST_1_10 = version.parse(SMP_VERSION) >= version.parse("1.10")
-
-    from transformers.trainer_pt_utils import smp_forward_backward, smp_forward_only, smp_gather, smp_nested_concat
-else:
-    IS_SAGEMAKER_MP_POST_1_10 = False
+# Name of the files used for checkpointing
+TRAINING_ARGS_NAME = "training_args.bin"
+TRAINER_STATE_NAME = "trainer_state.json"
+OPTIMIZER_NAME = "optimizer.pt"
+OPTIMIZER_NAME_BIN = "optimizer.bin"
+SCHEDULER_NAME = "scheduler.pt"
+SCALER_NAME = "scaler.pt"
+FSDP_MODEL_NAME = "pytorch_model_fsdp"
 
 
 def denest_and_itemize(d):
@@ -107,6 +151,8 @@ def denest_and_itemize(d):
 
 class MultitaskTrainer(Trainer):
 
+    from transformers.trainer_pt_utils import _get_learning_rate, log_metrics, metrics_format, save_metrics, save_state
+
     def __init__(
         self,
         training_tasks: Optional[Set[str]] = None,
@@ -117,7 +163,7 @@ class MultitaskTrainer(Trainer):
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction, bool], Dict]] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
@@ -329,7 +375,7 @@ class MultitaskTrainer(Trainer):
                 if self.preprocess_logits_for_metrics is not None:
                     logits = self.preprocess_logits_for_metrics(logits, labels)
                 logits = self.gather_function((logits))
-                preds_host = logits if preds_host is None else nested_concat(preds_host, preds, padding_index=-100)
+                preds_host = logits if preds_host is None else nested_concat(preds_host, logits, padding_index=-100)
 
             if labels is not None:
                 labels = self.gather_function((labels))
@@ -387,8 +433,8 @@ class MultitaskTrainer(Trainer):
                         }
                     )
                 if preds_host is not None:
-                    preds = nested_numpify(preds_host)
-                    all_preds = preds if all_preds is None else nested_concat(all_preds, preds, padding_index=-100)
+                    logits = nested_numpify(preds_host)
+                    all_preds = logits if all_preds is None else nested_concat(all_preds, logits, padding_index=-100)
                 if inputs_host is not None:
                     inputs_decode = nested_numpify(inputs_host)
                     all_inputs = (
@@ -422,8 +468,8 @@ class MultitaskTrainer(Trainer):
                 }
             )
         if preds_host is not None:
-            preds = nested_numpify(preds_host)
-            all_preds = preds if all_preds is None else nested_concat(all_preds, preds, padding_index=-100)
+            logits = nested_numpify(preds_host)
+            all_preds = logits if all_preds is None else nested_concat(all_preds, logits, padding_index=-100)
         if inputs_host is not None:
             inputs_decode = nested_numpify(inputs_host)
             all_inputs = (
@@ -656,12 +702,12 @@ class MultitaskTrainer(Trainer):
                 # references registered here no longer work on other gpus, breaking the module
                 raise ValueError(
                     "Currently --debug underflow_overflow is not supported under DP. Please use DDP"
-                    " (torch.distributed.launch)."
+                    " (torchrun or torch.distributed.launch (deprecated))."
                 )
             else:
                 debug_overflow = DebugUnderflowOverflow(self.model)  # noqa
 
-        delay_optimizer_creation = is_sagemaker_mp_enabled() or self.fsdp is not None or self.is_fsdp_enabled
+        delay_optimizer_creation = is_sagemaker_mp_enabled() or self.is_fsdp_xla_enabled or self.is_fsdp_enabled
 
         # We need to reset the scheduler, as its parameters may be different on subsequent calls
         if self._created_lr_scheduler:
@@ -711,8 +757,6 @@ class MultitaskTrainer(Trainer):
         use_accelerator_prepare = True if model is self.model else False
 
         if delay_optimizer_creation:
-            if use_accelerator_prepare:
-                self.model = self.accelerator.prepare(self.model)
             self.create_optimizer_and_scheduler(num_training_steps=max_steps)
 
         # prepare using `accelerator` prepare
@@ -935,9 +979,7 @@ class MultitaskTrainer(Trainer):
                 ):
                     # the `or` condition of `is_last_step_and_steps_less_than_grad_acc` is not covered
                     # in accelerate. So, explicitly enable sync gradients to True in that case.
-                    if is_last_step_and_steps_less_than_grad_acc or (
-                        version.parse(accelerate_version) <= version.parse("0.20.3")
-                    ):
+                    if is_last_step_and_steps_less_than_grad_acc:
                         self.accelerator.gradient_state._set_sync_gradients(True)
 
                     # Gradient clipping
