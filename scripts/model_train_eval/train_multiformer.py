@@ -142,7 +142,7 @@ def main(args):
     if MultiformerTask.DET_3D in args.tasks + args.train_tasks:
         keys_to_load.append(Keys.boxes3d)
         if MultiformerTask.DET_3D in args.train_tasks:
-            loss_lambdas[MultiformerTask.DET_3D] = 0.1
+            loss_lambdas[MultiformerTask.DET_3D] = 1.0
     # if "panseg" in args.tasks + args.train_tasks:
     #     keys_to_load.append(Keys.masks)
 
