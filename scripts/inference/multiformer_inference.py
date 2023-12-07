@@ -268,33 +268,40 @@ def main(args):
                     pred_labels[pred_labels == 256] = 0
 
                 for i, pred_label in enumerate(pred_labels):
-                    out_path = semseg_path / f"{frame_id}_semseg_{view}.png"
+                    out_path = semseg_path / f"{frame_id:08d}_semseg_{view}.png"
                     out_path.parent.mkdir(exist_ok=True, parents=True)
                     cv2.imwrite(str(out_path), pred_label)
 
             if hasattr(outputs, "pred_depth"):
                 depth_path = view_path / "depth" / args.scene_name
                 depth_path.mkdir(exist_ok=True, parents=True)
-                depth = np.exp(outputs.pred_depth.detach().cpu().numpy())
-                for i, depth_map in enumerate(depth):
-                    np.save(file=depth_path / f"{frame_id}_depth_{view}", arr=depth_map)
+                depth = np.exp(outputs.pred_depth.detach().cpu().numpy()) / 1000
+                depth *= 16777216.0
+                depth = depth.transpose(1, 2, 0).round().astype(np.int32)
+                depth_8bit = np.concatenate([depth & 0xFF, depth >> 8 & 0xFF, depth >> 16 & 0xFF], axis=-1).astype(np.uint8)
+                cv2.imwrite(str(depth_path / f"{frame_id:08d}_depth_{view}.png"), cv2.cvtColor(depth_8bit, cv2.COLOR_BGR2RGB))
 
             if hasattr(outputs, "pred_boxes"):
 
                 preds = post_process_object_detection(
                     outputs=outputs, threshold=0.35, target_sizes=[rgb_frame.shape[:2]]
                 )
-                pred_frame = deepcopy(dict(sd.frames[frame_id]))
-                pred_frame["intrinsics"] = dict(pred_frame["intrinsics"])
-                pred_frame["extrinsics"] = dict(pred_frame["extrinsics"])
-                pred_frame["labels"] = [
-                    {
-                        "id": i,
-                        "category": id2label_boxes2d[label.item()],
-                        "box2d": {"x1": box2d[0], "y1": box2d[1], "x2": box2d[2], "y2": box2d[3]},
-                    } for i, (box2d, label) in enumerate(zip(preds[0]["boxes"], preds[0]["labels"]))
-                ]
-                pred_frame["url"] = out_path
+                pred_frame = {
+                    "name": sd.frames[frame_id].name,
+                    "videoName": sd.frames[frame_id].videoName,
+                    "intrinsics": dict(sd.frames[frame_id].intrinsics),
+                    "extrinsics": dict(sd.frames[frame_id].extrinsics),
+                    "attributes": dict(sd.frames[frame_id].attributes),
+                    "frameIndex": sd.frames[frame_id].frameIndex,
+                    "labels": [
+                        {
+                            "id": i,
+                            "category": id2label_boxes2d[label.item()],
+                            "box2d": {"x1": box2d[0], "y1": box2d[1], "x2": box2d[2], "y2": box2d[3]},
+                        } for i, (box2d, label) in enumerate(zip(preds[0]["boxes"], preds[0]["labels"]))
+                    ],
+                }
+                # pred_frame["url"] = out_path
                 det2d_pred_frames.append(pred_frame)
 
         if len(det2d_pred_frames) > 0:
