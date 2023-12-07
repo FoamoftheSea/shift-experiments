@@ -224,7 +224,7 @@ def main(args):
         sd = dataset.scalabel_datasets[f"{view}/det_2d"]
         id2label_boxes2d = {v: k for k, v in sd.cats_name2id["boxes2d"].items()}
         frame_ids = dataset.video_to_indices[args.scene_name]
-        view_path = Path(args.output) / "discrete" / "images" / "train" / view
+        view_path = Path(args.output) / "discrete" / "images" / args.split / view
         det2d_path = view_path / "det_2d.json"
         det2d_pred_frames = []
 
