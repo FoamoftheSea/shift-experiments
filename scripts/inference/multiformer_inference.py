@@ -10,36 +10,34 @@ import cv2
 import numpy as np
 import torch
 from shift_dev import SHIFTDataset
-from shift_dev.dataloader.image_processors import MultitaskImageProcessor
 from shift_dev.types import Keys
 from shift_dev.utils.backend import FileBackend
-from shift_dev.utils.load import im_decode
 from transformers import Multiformer
 from transformers.models.multiformer.image_processing_multiformer import post_process_object_detection
+from transformers.models.multiformer.modeling_multiformer import MultiformerTask
 
 
 def save_json(d, fp):
     with open(fp, "w") as f:
-        json.dump(nested_numpify(d), f)
+        json.dump(nested_jsonize(d), f)
 
 
-def nested_numpify(tensors):
+def nested_jsonize(tensors):
     "Numpify `tensors` (even if it's a nested list/tuple/dict of tensors)."
     if isinstance(tensors, torch.Tensor) and len(tensors.shape) == 0:
         return tensors.item()
     elif isinstance(tensors, (list, tuple)):
-        return type(tensors)(nested_numpify(t) for t in tensors)
+        return type(tensors)(nested_jsonize(t) for t in tensors)
     elif isinstance(tensors, (np.ndarray, torch.Tensor)):
-        return [nested_numpify(t) for t in tensors]
+        return [nested_jsonize(t) for t in tensors]
     elif isinstance(tensors, Mapping):
-        return type(tensors)({k: nested_numpify(t) for k, t in tensors.items()})
+        return type(tensors)({k: nested_jsonize(t) for k, t in tensors.items()})
     elif isinstance(tensors, (int, float)) or tensors is None:
         return tensors
     elif isinstance(tensors, (str, Path)):
         return str(tensors)
     else:
         raise ValueError("Unexpected type:", type(tensors))
-
 
 
 def shift_multiformer_collator(features):
@@ -79,90 +77,6 @@ def shift_multiformer_collator(features):
     return batch
 
 
-class SHIFTInferenceCameraFrame:
-
-    def __init__(self, frame, camera_name):
-        self.frame = frame
-        self.camera_name = camera_name
-        self._image = None
-        self._semseg = None
-        self._depth = None
-        self.data_root = self.frame.scene.scene_path / self.camera_name
-
-    @property
-    def image(self):
-        if self._image is None:
-            fp = (
-                self.data_root
-                / "img"
-                / f"{self.frame.frame_id}_img_{self.camera_name}.png"
-            )
-            self._image = self._load_image(filepath=str(fp))
-
-        return self._image
-
-    @property
-    def semantic_mask(self):
-        if self._semseg is None:
-            fp = (
-                self.data_root
-                / "semseg"
-                / f"{self.frame.frame_id}_semseg_{self.camera_name}.png"
-            )
-            self._semseg = self._load_semseg(filepath=str(fp))
-
-        return self._semseg
-
-    @property
-    def depth(self):
-        if self._depth is None:
-            fp = (
-                self.data_root
-                / "depth"
-                / f"{self.frame.frame_id}_depth_{self.camera_name}.npy"
-            )
-            self._depth = self._load_depth(filepath=str(fp))
-
-        return self._depth
-
-    def _load_image(self, filepath: str) -> np.ndarray:
-        im_bytes = self.frame.scene.dataset.backend.get(filepath)
-        image = im_decode(im_bytes, mode="RGB")
-        return image  # torch.as_tensor(image, dtype=torch.int64)
-
-    def _load_semseg(self, filepath: str) -> np.ndarray:
-        im_bytes = self.frame.scene.dataset.backend.get(filepath)
-        semseg = im_decode(im_bytes)[..., 0]
-        return semseg
-
-    def _load_depth(self, filepath: str) -> np.ndarray:
-        depth = np.load(filepath)
-        return depth
-
-
-class SHIFTInferenceFrame:
-
-    def __init__(self, scene, frame_id):
-        self.scene = scene
-        self.frame_id = frame_id
-
-    def get_camera_frame(self, camera_name):
-        return SHIFTInferenceCameraFrame(self, camera_name)
-
-
-class SHIFTInferenceScene:
-
-    def __init__(self, dataset, scene_name):
-        self.dataset = dataset
-        self.name = scene_name
-        self.scene_path = self.dataset.dataset_path / self.name
-        self.camera_names = [path.stem for path in self.scene_path.iterdir()]
-        self.frame_ids = [str(path.stem).split("_")[0] for path in (self.scene_path / self.camera_names[0] / "img").glob("*.png")]
-
-    def get_frame(self, frame_id):
-        return SHIFTInferenceFrame(self, frame_id)
-
-
 def prepare_inputs(input, device):
     if isinstance(input, torch.Tensor):
         return input.to(device)
@@ -172,17 +86,6 @@ def prepare_inputs(input, device):
         return {k: prepare_inputs(v, device) for k, v in input.items()}
     else:
         raise ValueError("input must be tensor, array or mapping. Got {}".format(type(input)))
-
-
-class SHIFTInferenceDataset:
-
-    def __init__(self, dataset_path: str):
-        self.dataset_path = Path(dataset_path)
-        self.scene_names = [path.stem for path in self.dataset_path.iterdir()]
-        self.backend = FileBackend()
-
-    def get_scene(self, scene_name: str):
-        return SHIFTInferenceScene(self, scene_name)
 
 
 def main(args):
@@ -216,6 +119,7 @@ def main(args):
     model = Multiformer.from_pretrained(
         args.checkpoint,
         ignore_mismatched_sizes=False,
+        omit_heads=[MultiformerTask.DET_3D]
         # device_map=args.device,
     ).to(args.device)
     model.eval()
