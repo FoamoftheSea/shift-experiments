@@ -201,7 +201,7 @@ def main(args):
         keys_to_load=keys_to_load,
         views_to_load=views_to_load,
         framerate=args.framerate,
-        shift_type="discrete",
+        shift_type=args.shift_type,
         backend=FileBackend(),
         num_workers=1,
         verbose=False,
@@ -224,7 +224,7 @@ def main(args):
         sd = dataset.scalabel_datasets[f"{view}/det_2d"]
         id2label_boxes2d = {v: k for k, v in sd.cats_name2id["boxes2d"].items()}
         frame_ids = dataset.video_to_indices[args.scene_name]
-        view_path = Path(args.output) / "discrete" / "images" / args.split / view
+        view_path = Path(args.output) / args.shift_type / args.framerate / args.split / view
         det2d_path = view_path / "det_2d.json"
         det2d_pred_frames = []
 
@@ -240,7 +240,7 @@ def main(args):
             with open(det2d_path, "r") as f:
                 write_json = json.load(f)
 
-        for frame_id in frame_ids[:1]:
+        for frame_id in frame_ids:
             rgb_frame = dataset._load_image(sd.frames[frame_id].url)
             processed_frame = shift_multiformer_collator([prepare_inputs(dataset[frame_id], args.device)])
 
@@ -268,7 +268,7 @@ def main(args):
                     pred_labels[pred_labels == 256] = 0
 
                 for i, pred_label in enumerate(pred_labels):
-                    out_path = semseg_path / f"{frame_id:08d}_semseg_{view}.png"
+                    out_path = semseg_path / f"{sd.frames[frame_id].frameIndex:08d}_semseg_{view}.png"
                     out_path.parent.mkdir(exist_ok=True, parents=True)
                     cv2.imwrite(str(out_path), pred_label)
 
@@ -279,12 +279,12 @@ def main(args):
                 depth *= 16777216.0
                 depth = depth.transpose(1, 2, 0).round().astype(np.int32)
                 depth_8bit = np.concatenate([depth & 0xFF, depth >> 8 & 0xFF, depth >> 16 & 0xFF], axis=-1).astype(np.uint8)
-                cv2.imwrite(str(depth_path / f"{frame_id:08d}_depth_{view}.png"), cv2.cvtColor(depth_8bit, cv2.COLOR_BGR2RGB))
+                cv2.imwrite(str(depth_path / f"{sd.frames[frame_id].frameIndex:08d}_depth_{view}.png"), cv2.cvtColor(depth_8bit, cv2.COLOR_BGR2RGB))
 
             if hasattr(outputs, "pred_boxes"):
 
                 preds = post_process_object_detection(
-                    outputs=outputs, threshold=0.35, target_sizes=[rgb_frame.shape[:2]]
+                    outputs=outputs, threshold=0.30, target_sizes=[rgb_frame.shape[:2]]
                 )
                 pred_frame = {
                     "name": sd.frames[frame_id].name,
@@ -295,7 +295,7 @@ def main(args):
                     "frameIndex": sd.frames[frame_id].frameIndex,
                     "labels": [
                         {
-                            "id": i,
+                            "id": i + 1,
                             "category": id2label_boxes2d[label.item()],
                             "box2d": {"x1": box2d[0], "y1": box2d[1], "x2": box2d[2], "y2": box2d[3]},
                         } for i, (box2d, label) in enumerate(zip(preds[0]["boxes"], preds[0]["labels"]))
@@ -318,10 +318,11 @@ if __name__ == "__main__":
     parser.add_argument("-t", "--tasks", nargs="*", type=str, help="Tasks to run inference on.")
     parser.add_argument("-o", "--output", type=str, default="./inference_out", help="Path for output.")
     parser.add_argument("-fr", "--framerate", type=str, default="images", help="Framerate to load.")
-    parser.add_argument("-sn", "--scene-name", type=str, default="0aee-69fd", help="Name of scene to load.")
+    parser.add_argument("-sn", "--scene-name", type=str, default="4bed-91bf", help="Name of scene to load.")
     parser.add_argument("-bs", "--batch-size", type=int, default=4, help="Number of frames to run at once.")
     parser.add_argument("--device", type=str, default="cpu", help="Pytorch device for computation.")
     parser.add_argument("-gt", "--load-gt", action="store_true", help="Flag to load ground truth for loss calculation.")
+    parser.add_argument("-shift", "--shift_type", type=str, default="discrete", help="Domain shift type (continuous/discrete).")
 
     with torch.no_grad():
         main(parser.parse_args())
