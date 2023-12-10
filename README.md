@@ -35,11 +35,11 @@ If you'd prefer to work outside the Docker container, you can set up like this:
       - Linux: `export PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu117`
       - Windows: `$env:PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu117"`
    2. `pip install -e .`
-6. Install bitsandbytes:
+6. Install bitsandbytes (optional):
    - git clone https://github.com/TimDettmers/bitsandbytes.git
    - cd bitsandbytes
    - CUDA_VERSION=117 make cuda11x
    - python setup.py install
    - cd ..
 7. Run a training script (Use --help to discover params):
-   - `python ./scripts/model_train_eval/train_deformable_detr.py --help`
+   - `python ./scripts/model_train_eval/train_multiformer.py --help`
