@@ -1,4 +1,3 @@
-import sys
 from argparse import ArgumentParser
 from typing import Optional, List, Dict, Any, Mapping
 
@@ -7,6 +6,7 @@ import torch
 import wandb
 from shift_dev import SHIFTDataset
 from shift_dev.dataloader.image_processors import MultitaskImageProcessor
+from shift_lab.ontologies.det_3d.utils import SHIFT_BOX3D_SIZE_MEANS
 from shift_lab.trainer import MultitaskTrainer
 from shift_lab.ontologies.semantic_segmentation.shift_labels import id2label as shift_id2label
 from shift_dev.types import Keys
@@ -17,14 +17,8 @@ from transformers.data.data_collator import InputDataClass
 from transformers.models.multiformer.configuration_multiformer import MultiformerConfig
 from transformers.models.multiformer.metrics_multiformer import MultiformerMetric
 from transformers.models.multiformer.modeling_multiformer import MultiformerTask, Multiformer
-from transformers.training_args import OptimizerNames
 from transformers.utils import logging
-from transformers import (
-    PvtV2Config,
-    PvtV2Model,
-    AutoBackbone,
-    TrainingArguments, EvalPrediction,
-)
+from transformers import PvtV2Config, TrainingArguments, EvalPrediction
 
 DO_REDUCE_LABELS = True
 EVAL_IGNORE_IDS = {k for k, v in shift_id2label.items() if v.ignoreInEval}
@@ -102,7 +96,7 @@ def shift_multiformer_collator(features: List[InputDataClass]) -> Dict[str, Any]
     # Handling of all other possible keys.
     # Again, we will use the first element to figure out which key/values are not None for this model.
     for k, v in first.items():
-        if k == "labels":
+        if k == "labels" or k == "labels_3d":
             batch[k] = [f[k] for f in features]
         elif k not in ("label", "label_ids") and v is not None and not isinstance(v, str):
             if isinstance(v, torch.Tensor):
@@ -117,20 +111,6 @@ def shift_multiformer_collator(features: List[InputDataClass]) -> Dict[str, Any]
 
 def main(args):
 
-    mean_ap_metric = MultiformerMetric(tasks=args.train_tasks, id2label=id2label,
-                                       box_score_threshold=DET2D_BOX_KEEP_PROB)
-
-    def compute_metrics(
-            tasks: List[MultiformerTask],
-            eval_pred: EvalPrediction,
-            calculate_result: bool = True
-    ) -> Optional[dict]:
-
-        with torch.no_grad():
-            for task in tasks:
-                mean_ap_metric.update(task, eval_pred)
-            return mean_ap_metric.compute() if calculate_result else None
-
     image_processor_train = MultitaskImageProcessor.from_pretrained(
         PRETRAINED_MODEL_NAME, do_reduce_labels=DO_REDUCE_LABELS, class_id_remap=CLASS_ID_REMAP,
     )
@@ -144,21 +124,25 @@ def main(args):
         Keys.images,  # images, shape (1, 3, H, W), uint8 (RGB)
         Keys.intrinsics,  # camera intrinsics, shape (3, 3)
         Keys.boxes2d,
-        Keys.segmentation_masks,
-        Keys.depth_maps,
-        # Keys.masks,
     ]
 
     loss_lambdas = {}
-    if "det2d" in args.train_tasks:
-        keys_to_load.append(Keys.boxes2d)
-        loss_lambdas["det_2d"] = 1.0
-    if "semseg" in args.train_tasks:
+    if MultiformerTask.DET_2D in args.train_tasks:
+        loss_lambdas[MultiformerTask.DET_2D] = 1.0
+    if MultiformerTask.SEMSEG in args.tasks + args.train_tasks:
         keys_to_load.append(Keys.segmentation_masks)
-        loss_lambdas["semseg"] = 5.0
-    if "depth" in args.train_tasks:
+        if MultiformerTask.SEMSEG in args.train_tasks:
+            loss_lambdas[MultiformerTask.SEMSEG] = 5.0
+    if MultiformerTask.DEPTH in args.tasks + args.train_tasks:
         keys_to_load.append(Keys.depth_maps)
-        loss_lambdas["depth"] = 1.0
+        if MultiformerTask.DEPTH in args.train_tasks:
+            loss_lambdas[MultiformerTask.DEPTH] = 1.0
+    if MultiformerTask.DET_3D in args.tasks + args.train_tasks:
+        keys_to_load.append(Keys.boxes3d)
+        if MultiformerTask.DET_3D in args.train_tasks:
+            loss_lambdas[MultiformerTask.DET_3D] = 1.0
+    # if "panseg" in args.tasks + args.train_tasks:
+    #     keys_to_load.append(Keys.masks)
 
     train_dataset = SHIFTDataset(
         data_root=args.data_root,
@@ -197,6 +181,9 @@ def main(args):
     #     prefix = "/mnt/c"
     # model_name_or_path = f"{prefix}/Users/Nate/transformers/ddetr_test1/pytorch_model.bin"
     model_config = MultiformerConfig(
+            tasks=args.tasks,
+            train_tasks=args.train_tasks,
+            train_backbone=not args.freeze_backbone,
             use_timm_backbone=False,
             backbone="pvt_v2",
             backbone_config=PvtV2Config(
@@ -213,6 +200,7 @@ def main(args):
             decoder_layers=3,
             decoder_ffn_dim=256,
             id2label=id2label_boxes2d,
+            label2id=label2id_boxes2d,
             num_queries=300,
             det2d_input_feature_levels=[1, 2, 3],
             det2d_input_proj_kernels=[1, 1, 1],
@@ -220,15 +208,12 @@ def main(args):
             det2d_extra_feature_levels=1,
             det2d_use_pos_embed=not args.no_pos_embed,
             det2d_box_keep_prob=DET2D_BOX_KEEP_PROB,
-            tasks=args.train_tasks,
+            det2d_fuse_semantic=False,
+            det2d_fuse_depth=False,
+            det3d_type_mean_sizes=SHIFT_BOX3D_SIZE_MEANS,
             frozen_batch_norm=args.freeze_batch_norms,
         )
-    # model_config = MultiformerConfig.from_pretrained(
-    #     args.checkpoint,
-    #     id2label=id2label_boxes2d,
-    #     label2id=label2id_boxes2d,
-    #     num_labels=len(id2label_boxes2d),
-    # )
+
     if args.checkpoint is not None:
         model = Multiformer.from_pretrained(
             args.checkpoint,
@@ -241,42 +226,55 @@ def main(args):
 
     if args.use_adam8bit:
         import bitsandbytes as bnb
+        params = [
+            {"params": model.bbox_embed.parameters()},
+            {"params": model.class_embed.parameters()},
+            {"params": model.model.encoder.parameters()},
+            {"params": model.model.decoder.parameters()},
+            {"params": model.model.input_proj.parameters()},
+            {"params": model.model.level_embed},
+            {"params": model.model.query_position_embeddings.parameters()},
+            {"params": model.model.reference_points.parameters()},
+            {"params": model.model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
+            {"params": model.model.depth_head.parameters(), "lr": args.learning_rate / 5},
+            {"params": model.model.semantic_head.parameters(), "lr": args.learning_rate / 5},
+        ]
+        if not args.freeze_backbone:
+            params.append({"params": model.model.backbone.parameters(), "lr": args.learning_rate / 10})
         optimizer = bnb.optim.Adam8bit(
-            params=[
-                {"params": model.bbox_embed.parameters()},
-                {"params": model.class_embed.parameters()},
-                {"params": model.model.encoder.parameters()},
-                {"params": model.model.decoder.parameters()},
-                {"params": model.model.input_proj.parameters()},
-                {"params": model.model.level_embed},
-                {"params": model.model.query_position_embeddings.parameters()},
-                {"params": model.model.reference_points.parameters()},
-                {"params": model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.depth_head.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.semantic_head.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.model.backbone.parameters(), "lr": args.learning_rate / 10},
-            ],
+            params=params,
             lr=args.learning_rate,
         )
     else:
+        params = [
+            {"params": model.bbox_embed.parameters()},
+            {"params": model.class_embed.parameters()},
+            {"params": model.model.encoder.parameters()},
+            {"params": model.model.decoder.parameters()},
+            {"params": model.model.input_proj.parameters()},
+            {"params": model.model.level_embed},
+            {"params": model.model.query_position_embeddings.parameters()},
+            {"params": model.model.reference_points.parameters()},
+            {"params": model.model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
+            {"params": model.model.depth_head.parameters(), "lr": args.learning_rate / 5},
+            {"params": model.model.semantic_head.parameters(), "lr": args.learning_rate / 5},
+        ]
+        if not args.freeze_backbone:
+            params.append({"params": model.model.backbone.parameters(), "lr": args.learning_rate / 10})
         optimizer = torch.optim.AdamW(
-            params=[
-                {"params": model.bbox_embed.parameters()},
-                {"params": model.class_embed.parameters()},
-                {"params": model.model.encoder.parameters()},
-                {"params": model.model.decoder.parameters()},
-                {"params": model.model.input_proj.parameters()},
-                {"params": model.model.level_embed},
-                {"params": model.model.query_position_embeddings.parameters()},
-                {"params": model.model.reference_points.parameters()},
-                {"params": model.depth_decoder.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.depth_head.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.semantic_head.parameters(), "lr": args.learning_rate / 5},
-                {"params": model.model.backbone.parameters(), "lr": args.learning_rate / 10},
-            ],
+            params=params,
             lr=args.learning_rate,
         )
-    lr_sceduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=len(train_dataset))
+    # lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    #     optimizer, T_max=len(train_dataset) / args.gradient_accumulation_steps * args.epochs
+    # )
+    lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer=optimizer,
+        max_lr=args.learning_rate,
+        steps_per_epoch=len(train_dataset)//(args.gradient_accumulation_steps*args.batch_size),
+        epochs=args.epochs,
+        pct_start=0.1,
+    )
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         learning_rate=args.learning_rate,
@@ -299,6 +297,7 @@ def main(args):
         include_inputs_for_metrics=True,
         use_cpu=args.cpu,
         gradient_checkpointing=args.gradient_checkpointing,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         # metric_for_best_model="eval_map",
     )
 
@@ -306,15 +305,34 @@ def main(args):
     if CLASS_LOSS_WEIGHTS is not None:
         model.class_loss_weights = torch.tensor(CLASS_LOSS_WEIGHTS).to(args.device)
 
+    multiformer_metric = MultiformerMetric(
+        config=model_config,
+        id2label=id2label,
+        box_score_threshold=DET2D_BOX_KEEP_PROB
+    )
+
+    def compute_metrics(
+            tasks: List[MultiformerTask],
+            eval_pred: EvalPrediction,
+            calculate_result: bool = True
+    ) -> Optional[dict]:
+
+        with torch.no_grad():
+            for task in tasks:
+                multiformer_metric.update(task, eval_pred)
+            return multiformer_metric.compute() if calculate_result else None
+
+
     trainer = MultitaskTrainer(
         loss_lambdas=loss_lambdas,
+        eval_tasks=args.tasks,
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         compute_metrics=compute_metrics,
         data_collator=shift_multiformer_collator,
-        optimizers=(optimizer, lr_sceduler),
+        optimizers=(optimizer, lr_scheduler),
         compute_metrics_interval="batch",
     )
 
@@ -348,8 +366,10 @@ if __name__ == "__main__":
     parser.add_argument("-zip", "--load-zip", action="store_true", default=False, help="Train with zipped archives.")
     parser.add_argument("-tr", "--trainer_resume", action="store_true", default=False, help="Whether to resume trainer state with checkpoint load.")
     parser.add_argument("-cpu", "--cpu", action="store_true", default=False, help="Force CPU training.")
-    parser.add_argument("-tasks", "--train-tasks", nargs="*", type=str, default=["semseg", "depth", "det2d"], help="Tasks to train.")
+    parser.add_argument("-tt", "--train-tasks", nargs="*", type=str, default=["semseg", "depth", "det_2d"], help="Tasks to train.")
+    parser.add_argument("-t", "--tasks", nargs="*", type=str, default=["semseg", "depth", "det_2d"], help="Tasks to infer.")
     parser.add_argument("-fbn", "--freeze-batch-norms", action="store_true", default=False, help="Freeze batch norms in backbone.")
+    parser.add_argument("-fb", "--freeze-backbone", action="store_true", default=False, help="Freeze weights in backbone.")
     parser.add_argument("-npe", "--no-pos-embed", action="store_true", default=False, help="Do not use position embedding in Deformable DETR encoder.")
 
     args = parser.parse_args()
@@ -357,6 +377,17 @@ if __name__ == "__main__":
         args.eval_batch_size = args.batch_size
     if args.save_steps is None:
         args.save_steps = args.eval_steps
+
+    for attr in ["tasks", "train_tasks"]:
+        modified = []
+        for task in getattr(args, attr):
+            if task == "det2d":
+                modified.append("det_2d")
+            elif task == "det3d":
+                modified.append("det_3d")
+            else:
+                modified.append(task)
+        setattr(args, attr, modified)
 
     if args.cpu:
         args.device = "cpu"
