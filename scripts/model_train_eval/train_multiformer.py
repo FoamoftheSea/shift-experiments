@@ -127,10 +127,8 @@ def main(args):
     ]
 
     loss_lambdas = {}
-    if MultiformerTask.DET_2D in args.tasks + args.train_tasks:
-        keys_to_load.append(Keys.boxes2d)
-        if MultiformerTask.DET_2D in args.train_tasks:
-            loss_lambdas[MultiformerTask.DET_2D] = 1.0
+    if MultiformerTask.DET_2D in args.train_tasks:
+        loss_lambdas[MultiformerTask.DET_2D] = 1.0
     if MultiformerTask.SEMSEG in args.tasks + args.train_tasks:
         keys_to_load.append(Keys.segmentation_masks)
         if MultiformerTask.SEMSEG in args.train_tasks:
@@ -138,7 +136,7 @@ def main(args):
     if MultiformerTask.DEPTH in args.tasks + args.train_tasks:
         keys_to_load.append(Keys.depth_maps)
         if MultiformerTask.DEPTH in args.train_tasks:
-            loss_lambdas[MultiformerTask.DEPTH] = 2.0
+            loss_lambdas[MultiformerTask.DEPTH] = 1.0
     if MultiformerTask.DET_3D in args.tasks + args.train_tasks:
         keys_to_load.append(Keys.boxes3d)
         if MultiformerTask.DET_3D in args.train_tasks:
@@ -210,17 +208,12 @@ def main(args):
             det2d_extra_feature_levels=1,
             det2d_use_pos_embed=not args.no_pos_embed,
             det2d_box_keep_prob=DET2D_BOX_KEEP_PROB,
-            det2d_fuse_semantic=True,
-            det2d_fuse_depth=True,
+            det2d_fuse_semantic=False,
+            det2d_fuse_depth=False,
             det3d_type_mean_sizes=SHIFT_BOX3D_SIZE_MEANS,
             frozen_batch_norm=args.freeze_batch_norms,
         )
-    # model_config = MultiformerConfig.from_pretrained(
-    #     args.checkpoint,
-    #     id2label=id2label_boxes2d,
-    #     label2id=label2id_boxes2d,
-    #     num_labels=len(id2label_boxes2d),
-    # )
+
     if args.checkpoint is not None:
         model = Multiformer.from_pretrained(
             args.checkpoint,
@@ -373,8 +366,8 @@ if __name__ == "__main__":
     parser.add_argument("-zip", "--load-zip", action="store_true", default=False, help="Train with zipped archives.")
     parser.add_argument("-tr", "--trainer_resume", action="store_true", default=False, help="Whether to resume trainer state with checkpoint load.")
     parser.add_argument("-cpu", "--cpu", action="store_true", default=False, help="Force CPU training.")
-    parser.add_argument("-tt", "--train-tasks", nargs="*", type=str, default=["semseg", "depth", "det2d", "det3d"], help="Tasks to train.")
-    parser.add_argument("-t", "--tasks", nargs="*", type=str, default=["semseg", "depth", "det2d", "det3d"], help="Tasks to infer.")
+    parser.add_argument("-tt", "--train-tasks", nargs="*", type=str, default=["semseg", "depth", "det_2d"], help="Tasks to train.")
+    parser.add_argument("-t", "--tasks", nargs="*", type=str, default=["semseg", "depth", "det_2d"], help="Tasks to infer.")
     parser.add_argument("-fbn", "--freeze-batch-norms", action="store_true", default=False, help="Freeze batch norms in backbone.")
     parser.add_argument("-fb", "--freeze-backbone", action="store_true", default=False, help="Freeze weights in backbone.")
     parser.add_argument("-npe", "--no-pos-embed", action="store_true", default=False, help="Do not use position embedding in Deformable DETR encoder.")
