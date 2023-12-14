@@ -3,22 +3,22 @@ This repository contains a set of tools for training models with the SHIFT datas
 
 ### Models
 
+- [Multiformer](https://github.com/FoamoftheSea/transformers/blob/multiformer/src/transformers/models/multiformer/modeling_multiformer.py) - *read the [blog post](https://natecibik.medium.com/multiformer-51b81df826b7) and [WandB Report](https://api.wandb.ai/links/indezera/gy0jftkc)*
+  - Expansion of Multitask Segformer into 2D object detection by incorporating a scaled-down version of [Deformable DETR](https://arxiv.org/abs/2010.04159).
+  - Usage scripts:
+    - [Train/eval](scripts/model_train_eval/train_multiformer.py)
+    - [Inference](scripts/inference/multiformer_inference.py)
+
+
 - [Multitask Segformer](./shift_lab/models/multitask_segformer) - *read the [blog post](https://hiddenlayers.tech/blog/segformer-demonstrates-powerful-multitask-performance) and [WandB Report](https://api.wandb.ai/links/indezera/4ua2bsyk)*
-  - Uses a single encoder (hierarchical transformer encoder from [Segformer](https://arxiv.org/abs/2105.15203)) to feed features to two task heads (possibly could be expanded to include others). Can be constructed with Segformer B0-B5 for desired accuracy/efficiency tradeoff.
-    1. Semantic Segmentation from all-MLP decoding head from Segformer
-    2. Monocular Depth Estimation from [GLPN](https://arxiv.org/abs/2201.07436) decoding head
+  - Uses a [PVTv2](https://arxiv.org/abs/2106.13797) backbone with two task heads (possibly could be expanded to include others). Selection of B0-B5 model sizes for desired accuracy/efficiency tradeoff.
+    - Semantic Segmentation using all-MLP decoding head from [Segformer](https://arxiv.org/abs/2105.15203).
+    - Monocular Depth Estimation from [GLPN](https://arxiv.org/abs/2201.07436) decoding head.
+  - Usage scripts:
+    - [Train/eval](scripts/model_train_eval/train_multitask_segformer.py)
+    - [Inference](scripts/inference/multitask_segformer_inference.py)
 
 ## Setup
-### Docker (recommended)
-Since it can be difficult to get your pytorch, cuda, and bitsandbytes installation to work nicely together, you can save yourself the headache by building this Docker image and working inside of it.
-
-Navigate in your terminal into this repository. With [Docker](https://www.docker.com/) installed on your system:
-1. Build Docker image (this may take a while):
-   - `docker build -f Dockerfile . -t shift_lab:latest`
-2. Run Docker image:
-   - `docker run -it --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 shift_lab:latest`
-3. Run a training script (Use --help to discover params):
-   - `python shift-experiments/shift_lab/models/segformer/train_segformer.py --help`
 
 ### Local
 
@@ -43,3 +43,13 @@ If you'd prefer to work outside the Docker container, you can set up like this:
    - cd ..
 7. Run a training script (Use --help to discover params):
    - `python ./scripts/model_train_eval/train_multiformer.py --help`
+
+### Docker
+
+Navigate in your terminal into this repository. With [Docker](https://www.docker.com/) installed on your system:
+1. Build Docker image (this may take a while):
+   - `docker build -f Dockerfile . -t shift_lab:latest`
+2. Run Docker image:
+   - `docker run -it --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 shift_lab:latest`
+3. Run a training script (Use --help to discover params):
+   - `python shift-experiments/scripts/model_train_eval/train_multitask_segformer.py --help`
